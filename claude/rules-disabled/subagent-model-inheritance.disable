@@ -1,0 +1,8 @@
+---
+alwaysApply: true
+---
+
+# Subagent model inheritance
+
+- When using the Agent tool to launch any subagent, never set the `model` parameter.
+- Let every subagent follow the current session's model by omitting model overrides in all cases.

@@ -1,0 +1,33 @@
+# OMP runtime state and credentials
+agent/agent.db*
+agent/history.db*
+agent/models.db*
+agent/config.yml.lock
+agent/*.lock
+plugins/node_modules/
+plugins/.cache/
+
+# Claude runtime state and installation caches
+claude/settings.json
+claude/.claude.json*
+claude/plugins/
+claude/cache/
+claude/projects/
+claude/sessions/
+claude/file-history/
+claude/session-env/
+claude/telemetry/
+claude/shell-snapshots/
+claude/tasks/
+claude/daemon/
+claude/jobs/
+claude/research_output/
+
+# Credential-bearing and generated files
+claude/skills/**/.env
+claude/skills/km-endpoints/endpoints/
+**/__pycache__/
+**/*.pyc
+**/*.db
+**/*.db-*
+**/logs/

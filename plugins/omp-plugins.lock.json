@@ -1,0 +1,35 @@
+{
+  "plugins": {
+    "pi-commandcode-provider": {
+      "version": "0.5.1",
+      "enabledFeatures": null,
+      "enabled": true
+    },
+    "pi-rewind": {
+      "version": "0.5.0",
+      "enabledFeatures": null,
+      "enabled": true
+    },
+    "@giuseppe.trisciuoglio/pi-rules": {
+      "version": "1.1.1",
+      "enabledFeatures": null,
+      "enabled": true
+    },
+    "pi-patty-bg-tasks": {
+      "version": "1.1.6",
+      "enabledFeatures": null,
+      "enabled": true
+    },
+    "pi-schedule": {
+      "version": "0.3.6",
+      "enabledFeatures": null,
+      "enabled": true
+    },
+    "pi-bro": {
+      "version": "0.9.1",
+      "enabledFeatures": null,
+      "enabled": true
+    }
+  },
+  "settings": {}
+}

@@ -1,0 +1,13 @@
+---
+alwaysApply: true
+---
+
+# /tmp：本地可用，远端一律禁止
+
+# 禁止不检查实际执行位置直接写入莫名其妙的agent-work目录
+
+按命令的实际执行位置判断，不按产物类型或大小：assistant 直接执行命令的本地开发机可用 `/tmp`，不得仅因是 agent 产物就在本地改用 `~/agent-work`；通过 SSH、Komodo、远程 exec 或其他传输在任何远端执行时，禁止写 `/tmp` 及子路径。
+
+远端禁令覆盖 ssh/scp/sftp/rsync、全部 `ssh-manager ssh_*`、远端 `docker/kubectl/lxc/pct exec`、`qm guest exec`、Komodo/km Periphery 执行及其他远程封装；不因文件小、用后删除、socket/lock、部署任务或是否探测到 tmpfs 而例外。
+
+assistant 在远端产生的临时文件、脚本、下载、日志、clone、patch 和解压目录全部放登录用户 home，建议 `~/agent-work/<task>/`，完成后清理。读取任意路径不受限；服务正式运行需要的 compose、systemd、`/etc/<service>/`、数据卷和 registry 等最终部署位置按真实目标写。无法放 home、又不是最终部署位置的灰区产物，必须先说明原因和拟写路径并等待用户确认。

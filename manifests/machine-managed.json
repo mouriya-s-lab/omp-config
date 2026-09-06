@@ -1,0 +1,57 @@
+{
+  "portableNativeExtensions": [
+    "agent/extensions/v2-compaction-timeout.ts",
+    "agent/extensions/legacy-plugin-theme.ts",
+    "agent/extensions/commandcode-usage.ts",
+    "agent/extensions/xai-oauth-cost-ticks.ts"
+  ],
+  "machineManagedNativeExtensions": [
+    {
+      "path": "agent/machine-managed/extensions/orca-agent-status.ts",
+      "reason": "Orca-managed status integration; depends on ORCA_* runtime environment."
+    },
+    {
+      "path": "agent/machine-managed/extensions/orca-prefill.ts",
+      "reason": "Orca-managed prefill integration."
+    },
+    {
+      "path": "agent/machine-managed/extensions/orca-titlebar-spinner.ts",
+      "reason": "Orca-managed titlebar integration; depends on Orca runtime behavior."
+    },
+    {
+      "path": "agent/machine-managed/extensions/otty-integration.ts",
+      "reason": "Otty-generated integration; contains host-specific application and socket paths."
+    }
+  ],
+  "machineManagedClaudeHooks": [
+    "claude/machine-managed/hooks/herdr-agent-state.sh",
+    "claude/machine-managed/hooks/postcompact-reload-context.sh"
+  ],
+  "runtimeCouplings": [
+    {
+      "path": "agent/extensions/commandcode-usage.ts",
+      "requires": "pi-commandcode-provider installed under ~/.omp/plugins/node_modules",
+      "detail": "The extension imports the installed provider's converter helper by the native ~/.omp relative layout; no credential is bundled."
+    }
+  ],
+  "excludedRuntimeState": [
+    "~/.omp/agent/*.db*",
+    "~/.omp/agent/*-wal",
+    "~/.omp/agent/*-shm",
+    "~/.omp/logs",
+    "~/.omp/cache",
+    "~/.omp/sessions",
+    "~/.omp/blobs",
+    "~/.omp/terminal-sessions",
+    "~/.omp/plugins/node_modules",
+    "~/.claude/settings.json",
+    "~/.claude/plugins/cache",
+    "~/.claude/plugins/marketplaces",
+    "~/.claude runtime directories"
+  ],
+  "credentialHandling": {
+    "providerModelTemplate": "agent/models.yml",
+    "environmentVariable": "FUTUREPPO_API_KEY",
+    "rawCredentialSourcesExcluded": true
+  }
+}
