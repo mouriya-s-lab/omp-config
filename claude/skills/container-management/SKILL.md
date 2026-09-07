@@ -11,7 +11,7 @@ allowed-tools: Bash, Read
 
 ## Select and inspect before acting
 
-1. Find the target Core. `homelab` is on `moat-app1` (VM 110); `trading` is the independent Core on `trading-agent` (VM 130). Memos, HAPI, homepage, fulcrum, cliproxyapi and moat-browser are homelab routing examples, not an authoritative inventory. Trading workload ownership starts with `skill://homelab-trading`.
+1. Find the target Core. `homelab` is on `moat-app1` (VM 110); `trading` is the independent Core on `trading-agent` (VM 130). Memos, homepage, fulcrum, cliproxyapi and moat-browser are homelab routing examples, not an authoritative inventory. Trading workload ownership starts with `skill://homelab-trading`.
 2. Every invocation uses `-p <name>`. There is **no active profile**: another shell's selection changes nothing. The rendered config's `default_profile` is not permission to omit `-p`.
 3. Discover Servers and all Stacks, including down ones, before choosing a lifecycle action. Names and IDs are Core-local.
 

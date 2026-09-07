@@ -10,7 +10,6 @@ alwaysApply: true
 |---|---|
 | Repo owner、homelab-tf/pve-vctcn 边界、cross-repo invariant | `iac-projects` |
 | 是否 IaC-adjacent、禁止外部 agent 修改主机、部署任务路由到 `iac:deploy` | `iac-issue-routing` |
-| 为 HAPI worktree 编写含已知事实、约束、preview/apply/live/runtime checkpoint 的执行 issue | `iac-auto-deploy-issue` |
 | 把容器化 workload 一次性接入 Komodo 自动 CD、之后 tag 即自动 rollout | `iac-cicd-onboarding-issue` |
 | VM 130 trading-agent compose/secrets/sync、opend/moomoo 及 `homelab-trading` repo | `homelab-trading` |
 | 服务清单、数量、运行位置、missing-skill audit | `internal-services` |
@@ -32,7 +31,7 @@ alwaysApply: true
 
 无匹配项时按序调用：
 
-1. `internal-services`，使用其 inventory 和 missing-skills 列表覆盖 Mattermost、Forgejo、OpenBao、step-ca、HAPI、nanoclaw、fulcrum、homepage、agent-runtime 和完整 DNS ops。
+1. `internal-services`，使用其 inventory 和 missing-skills 列表覆盖 Mattermost、Forgejo、OpenBao、step-ca、nanoclaw、fulcrum、homepage、agent-runtime 和完整 DNS ops。
 2. `iac-projects` 确定 owner，再用 `iac-issue-routing` 确定边界；具体部署/修改优先 `iac-auto-deploy-issue` + `iac:deploy`，requirement-only handoff 只用于未决事实或决策。
 3. 以上 signpost 都检查后才 grep repo 或使用 memory。
 

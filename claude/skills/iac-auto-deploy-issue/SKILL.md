@@ -10,10 +10,10 @@ description: >-
 
 ```mermaid
 flowchart LR
-    issue["owning IaC repo 的 GitHub issue<br/>+ label iac:deploy"] -->|接收事件| router[github-hapi-agent-router]
-    router -->|分派执行| daemon[Mac daemon]
-    daemon -->|创建 worktree session| hapi[HAPI agent]
-    hapi -->|实现并收集证据| pr["IaC PR / 获授权的 apply / runtime 验证"]
+    issue["owning IaC repo 的 GitHub issue<br/>+ label iac:deploy"] -->|接收事件| router[automation router]
+    router -->|分派执行| daemon[execution daemon]
+    daemon -->|创建 worktree session| agent[execution agent]
+    agent -->|实现并收集证据| pr["IaC PR / 获授权的 apply / runtime 验证"]
 ```
 
 先用 `iac-projects` / `internal-services` 定位 owning repo，再用 `iac-issue-routing` 确认这是 IaC 变更而非普通 app 工作，最后用本 skill。通用 issue 规范走 `writing-issue`；本 skill 只特化 `iac:deploy` 的 issue body。
@@ -27,13 +27,13 @@ flowchart LR
 - issue 位于 `mouriya-s-lab/homelab-tf` 或 `mouriya-s-lab/pve-vctcn`。
 - 结果是一次真实的 IaC 变更，不能仅靠 owning workload repo 的 CI/CD 完成。范围包括 CT/VM、cloud-init、网络/DNS/ingress、根信任服务、GARM 配套、Komodo Core/Periphery，以及需要 IaC 落地的凭据配置。
 - source/artifact/version 或目标 state、目标边界、流量、持久化、secret 用途及 runtime 证明已足够明确。
-- HAPI agent 将在 owning repo 规则和授权范围内实现、开 PR、执行批准的 preview/apply 并收集 live 证据。
+- 执行 agent 将在 owning repo 规则和授权范围内实现、开 PR、执行批准的 preview/apply 并收集 live 证据。
 
 纯 research/spike、产品讨论、retroactive umbrella 不触发部署。未就绪的 body 写明 blocker；就绪后再补 `iac:deploy`，其他语义 label 按 repo 惯例保留。
 
 ## 核心规则：从已知事实可执行，不是死模板
 
-issue 要详细到 HAPI agent 无需重新发现基本部署契约就能开工，同时把那些事实确实未知的实现选择留给 IaC repo。按这两条测试写：
+issue 要详细到执行 agent 无需重新发现基本部署契约就能开工，同时把那些事实确实未知的实现选择留给 IaC repo。按这两条测试写：
 
 1. **已知即写**：当前对话、关联的 app PR、release、README、既有 IaC issue、service inventory 已经告诉你 repo / service / artifact / port / health endpoint / hostname class / secret 用途 / 持久化需求，就写进 issue。
 2. **未知不编**：当前证据没给出 VMID / module 名 / port / hostname / path / 确切命令，就别造。说清哪个决策留给 IaC agent、以及什么约束界定那个决策。
@@ -53,7 +53,7 @@ body 一律中文，遵循 `writing-issue`。按下列顺序用这些 section，
 
 - **触发标签**: `iac:deploy`
 - **目标 IaC 仓库**: `mouriya-s-lab/<homelab-tf|pve-vctcn>`（本 issue 所在仓库）
-- **执行上下文**: HAPI worktree agent 在该仓库内实现；实现 PR 必须关闭本 issue。
+- **执行上下文**: worktree agent 在该仓库内实现；实现 PR 必须关闭本 issue。
 - **执行模式**: <新部署 / 修改既有部署 / 回滚或修复 / 指针或版本更新 / GARM·registry·Komodo·edge 配套变更>
 
 ## 已知上下文
