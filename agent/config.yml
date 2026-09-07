@@ -1,5 +1,3 @@
-extensions:
-  - ~/.claude
 providers:
   webSearchOrder:
     - codex
