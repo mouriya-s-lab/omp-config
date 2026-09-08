@@ -82,3 +82,5 @@ compaction:
     - snapcompact
     - handoff
     - shake
+codexResets:
+  autoRedeem: "no"
