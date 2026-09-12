@@ -4,6 +4,14 @@ agent/history.db*
 agent/models.db*
 agent/config.yml.lock
 agent/*.lock
+agent/models.yml
+agent/models.yml.bak-*
+agent/commandcode-models.json
+agent/last-changelog-version
+agent/sessions/
+agent/terminal-sessions/
+agent/blobs/
+agent/cache/
 plugins/node_modules/
 plugins/.cache/
 

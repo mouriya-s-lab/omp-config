@@ -19,3 +19,6 @@ Subagents are capability tiers, not job roles; their model and reasoning effort 
 - A tier's capability boundary is part of the assignment; honest handoff of unsupported branches, never pressure the worker to guess or fabricate completion.
 - `specified` is not an independent explorer or verifier: inspect actual artifacts and execution evidence yourself; a worker's success claim alone is not evidence.
 - Keep the main session on the operator-selected model; never change model assignments, effort, or global tiny/smol roles as part of delegation.
+
+# Tool Call
+- MUST use the provided built-in tool when it covers the needed operation; NEVER ignore an available tool and assemble an equivalent custom command through a Bash interaction.

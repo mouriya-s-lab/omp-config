@@ -10,6 +10,7 @@ plugins=(
   'https://github.com/giuseppe-trisciuoglio/pi-rules'
   'pi-bro'
   'pi-commandcode-provider'
+  'pi-package-search'
   'pi-patty-bg-tasks'
   'pi-rewind'
   'pi-schedule'

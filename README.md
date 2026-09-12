@@ -7,17 +7,21 @@
 以下内容直接复制到 `~/.omp/agent/`：
 
 - `agent/config.yml`：OMP 配置和 UI 行为
+- `agent/settings.json`：扩展加载路径
 - `agent/APPEND_SYSTEM.md`：追加系统提示词
 - `agent/agents/`：agent 定义
 - `agent/extensions/`：本地扩展代码
 
-不要复制整个 `agent/` 目录。数据库、WAL、日志、缓存和锁文件是运行时状态，不属于迁移内容。
+不要复制整个 `agent/` 目录。数据库、WAL、日志、会话、缓存和锁文件是运行时状态，不属于迁移内容；`models.yml` 和 `commandcode-models.json` 含本机 API key 或本机生成的目录，同样不迁移。
+
+Orca 与 Otty 在运行时生成并重写 `agent/extensions/` 下的 `orca-*.ts` 和 `otty-integration.ts`，它们由各自应用的安装器维护，本仓库不收录。
 
 迁移前先备份并检查差异；迁移后重启 OMP：
 
 ```bash
 mkdir -p "$HOME/.omp/agent"
 cp agent/config.yml "$HOME/.omp/agent/config.yml"
+cp agent/settings.json "$HOME/.omp/agent/settings.json"
 cp agent/APPEND_SYSTEM.md "$HOME/.omp/agent/APPEND_SYSTEM.md"
 cp -a agent/agents agent/extensions "$HOME/.omp/agent/"
 ```
@@ -54,4 +58,4 @@ git status --short
 - 配置值符合预期
 - 插件名称、版本、路径和 `enabled` 状态符合预期
 - 第三方插件没有引入不需要的扩展
-- 仓库没有出现数据库、WAL、日志、缓存或插件运行时文件
+- 仓库没有出现数据库、WAL、日志、会话、缓存或插件运行时文件

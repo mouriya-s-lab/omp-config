@@ -1,3 +1,5 @@
+extensions:
+  - ~/.claude
 providers:
   webSearchOrder:
     - codex
@@ -29,7 +31,32 @@ theme:
   light: light-ocean
 setupVersion: 2
 colorBlindMode: false
+modelRoles:
+  slow: openai-codex/gpt-6-astra:xhigh
+  plan: openai-codex/gpt-6-astra:high
+  commit: openai-codex/gpt-6-astra:low
+  tiny: openai-codex/gpt-6-astra:low
+  task: openai-codex/gpt-6-astra:medium
+  advisor: openai-codex/gpt-6-astra:medium
+  vision: openai-codex/gpt-6-astra:low
+  default: commandcode/deepseek/deepseek-v4.1-flash:high
 defaultThinkingLevel: auto
+skills:
+  ignoredSkills:
+    - brainstorming
+    - dispatching-parallel-agents
+    - executing-plans
+    - finishing-a-development-branch
+    - receiving-code-review
+    - requesting-code-review
+    - subagent-driven-development
+    - systematic-debugging
+    - test-driven-development
+    - using-git-worktrees
+    - using-superpowers
+    - verification-before-completion
+    - writing-plans
+    - writing-skills
 dev:
   autoqaConsent: denied
 composer:
@@ -40,7 +67,7 @@ github:
 astGrep:
   enabled: true
 task:
-  eager: preferred
+  eager: always
   maxRuntimeMs: 0
   disabledAgents:
     - task
@@ -49,13 +76,14 @@ task:
     - reviewer
     - security-reviewer
   agentModelOverrides:
-    bounded: openai-codex/gpt-5.6-luna:max
-    specified: commandcode/meta/muse-spark-1.3-contributor:xhigh
+    bounded: commandcode/deepseek/deepseek-v4.1-flash:max
+    specified: opencode-go/muse-spark-1.3-contributor:xhigh
     unrestricted: openai-codex/gpt-6-astra
   agentPrewalk:
     {}
   isolation:
     enabled: true
+  enableLsp: false
 fetch:
   enabled: false
 browser:
@@ -82,5 +110,8 @@ compaction:
     - snapcompact
     - handoff
     - shake
+  thresholdTokens: 300000
 codexResets:
   autoRedeem: "no"
+lsp:
+  enabled: false
