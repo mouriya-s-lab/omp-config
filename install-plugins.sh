@@ -11,7 +11,7 @@ plugins=(
   'pi-bro'
   'pi-commandcode-provider'
   'pi-package-search'
-  'pi-patty-bg-tasks'
+  'pi-unified-exec'
   'pi-pretty-codeblocks'
   'pi-schedule'
   'https://github.com/Mouriya-Emma/omp-thinking-translator'
