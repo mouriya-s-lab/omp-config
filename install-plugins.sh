@@ -14,7 +14,7 @@ plugins=(
   'pi-patty-bg-tasks'
   'pi-pretty-codeblocks'
   'pi-schedule'
-  'pi-thinking-translator'
+  'https://github.com/Mouriya-Emma/omp-thinking-translator'
 )
 
 for plugin in "${plugins[@]}"; do

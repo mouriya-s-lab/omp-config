@@ -28,13 +28,22 @@ description: 把本机 ~/.omp 配置同步进本仓库快照（单向）
 - 文件任意位置出现 `marker: _otty`（`otty-integration.ts` 第 15 行的注释，**不在首行**）
 
 标记缺失时按普通扩展同步，不要仅凭文件名排除。
+## 不同步字段
+
+`agent/config.yml` 以下字段不参与同步到 remote：
+
+- `providers.webSearchOrder`
+- `modelRoles`
+- `defaultThinkingLevel`
+- `skills`
+
 
 ## 步骤
 
 1. 逐文件比对本机与仓库，列出"仓库缺失 / 内容不同 / 本机已删除"三类差异；无差异就直接报告已同步，不做多余改动。
-2. 差异文件用 `cp` 覆盖到仓库；`agents/` 与 `extensions/` 先 `diff -rq` 确认范围再同步。
+2. 差异文件按上述排除字段规则覆盖到仓库；`config.yml` 不得覆盖排除字段。`agents/` 与 `extensions/` 先 `diff -rq` 确认范围再同步。
 3. 若本机 `~/.omp/plugins/package.json` 的依赖集合与 `install-plugins.sh` 的插件列表不一致，按下述规则重写列表：URL/Git 依赖原样保留，npm 依赖写成不带版本号的名字。
-4. 校验：每个同步文件与源文件 `cmp` 一致；`bun -e` 能解析 `agent/config.yml`（`Bun.YAML.parse`）和 `agent/settings.json`（`JSON.parse`）。
+4. 校验：普通同步文件与源文件 `cmp` 一致；`config.yml` 只比较未排除字段，排除字段不参与同步校验；`bun -e` 能解析 `agent/config.yml`（`Bun.YAML.parse`）和 `agent/settings.json`（`JSON.parse`）。
 5. 扫描仓库无明文凭据：`sk-`、`ghp_`、以及超长的 `apiKey: <值>`。
 6. `git status --short` 确认没有数据库、WAL、sessions、缓存或插件运行时文件进入仓库。
 7. 提交并推送，commit message 用 `chore: sync snapshot with local omp config`，正文列出本机实际变化。
