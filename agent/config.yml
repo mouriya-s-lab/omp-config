@@ -1,62 +1,12 @@
 extensions:
   - ~/.claude
 providers:
-  webSearchOrder:
-    - codex
-    - perplexity
-    - gemini
-    - anthropic
-    - xai
-    - zai
-    - exa
-    - tinyfish
-    - jina
-    - kagi
-    - tavily
-    - firecrawl
-    - brave
-    - kimi
-    - parallel
-    - synthetic
-    - searxng
-    - startpage
-    - duckduckgo
-    - ecosia
-    - google
-    - mojeek
-    - public
 symbolPreset: nerd
 theme:
   dark: titanium
   light: light-ocean
 setupVersion: 2
 colorBlindMode: false
-modelRoles:
-  slow: openai-codex/gpt-6-astra:xhigh
-  plan: openai-codex/gpt-6-astra:high
-  commit: openai-codex/gpt-6-astra:low
-  tiny: openai-codex/gpt-6-astra:low
-  task: openai-codex/gpt-6-astra:medium
-  advisor: openai-codex/gpt-6-astra:medium
-  vision: openai-codex/gpt-6-astra:low
-  default: openai-codex/gpt-5.6-luna:max
-defaultThinkingLevel: auto
-skills:
-  ignoredSkills:
-    - brainstorming
-    - dispatching-parallel-agents
-    - executing-plans
-    - finishing-a-development-branch
-    - receiving-code-review
-    - requesting-code-review
-    - subagent-driven-development
-    - systematic-debugging
-    - test-driven-development
-    - using-git-worktrees
-    - using-superpowers
-    - verification-before-completion
-    - writing-plans
-    - writing-skills
 dev:
   autoqaConsent: denied
 composer:
