@@ -18,7 +18,7 @@
 
 命令定义在 `.omp/commands/sync-omp-config.md`，包含同步范围、排除项和校验步骤。
 
-## 迁移密钥到远端
+## 同步两台不同机器上的omp供应商密钥，避免换一台机器就要登录
 
 在仓库根目录启动 OMP，执行仓库级命令（定义见 `.omp/commands/migrate-omp-keys.md`），把本机 active 数据库（`PI_CODING_AGENT_DIR` 非空时取其下 `agent.db`，否则为 `~/.omp/agent/agent.db`）里的 `auth_credentials` 记录经 SSH 传到指定远端 OMP 主机：
 
