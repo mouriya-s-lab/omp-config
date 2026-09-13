@@ -39,7 +39,7 @@ modelRoles:
   task: openai-codex/gpt-6-astra:medium
   advisor: openai-codex/gpt-6-astra:medium
   vision: openai-codex/gpt-6-astra:low
-  default: commandcode/deepseek/deepseek-v4.1-flash:high
+  default: openai-codex/gpt-5.6-luna:max
 defaultThinkingLevel: auto
 skills:
   ignoredSkills:
@@ -67,7 +67,7 @@ github:
 astGrep:
   enabled: true
 task:
-  eager: always
+  eager: preferred
   maxRuntimeMs: 0
   disabledAgents:
     - task
@@ -76,9 +76,11 @@ task:
     - reviewer
     - security-reviewer
   agentModelOverrides:
-    bounded: commandcode/deepseek/deepseek-v4.1-flash:max
-    specified: opencode-go/muse-spark-1.3-contributor:xhigh
-    unrestricted: openai-codex/gpt-6-astra
+    sonic: openai-codex/gpt-5.6-luna:max
+    task: openai-codex/gpt-5.6-luna:max
+    task:mid: openai-codex/gpt-5.6-luna:max
+    task:low: opencode-go/muse-spark-1.3-contributor:xhigh
+    task:high: openai-codex/gpt-6-astra
   agentPrewalk:
     {}
   isolation:
@@ -110,7 +112,7 @@ compaction:
     - snapcompact
     - handoff
     - shake
-  thresholdTokens: 300000
+  thresholdTokens: 500000
 codexResets:
   autoRedeem: "no"
 lsp:

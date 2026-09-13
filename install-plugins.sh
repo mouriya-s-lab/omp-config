@@ -12,8 +12,9 @@ plugins=(
   'pi-commandcode-provider'
   'pi-package-search'
   'pi-patty-bg-tasks'
-  'pi-rewind'
+  'pi-pretty-codeblocks'
   'pi-schedule'
+  'pi-thinking-translator'
 )
 
 for plugin in "${plugins[@]}"; do
