@@ -18,6 +18,18 @@
 
 命令定义在 `.omp/commands/sync-omp-config.md`，包含同步范围、排除项和校验步骤。
 
+## 迁移密钥到远端
+
+在仓库根目录启动 OMP，执行仓库级命令（定义见 `.omp/commands/migrate-omp-keys.md`），把本机 active 数据库（`PI_CODING_AGENT_DIR` 非空时取其下 `agent.db`，否则为 `~/.omp/agent/agent.db`）里的 `auth_credentials` 记录经 SSH 传到指定远端 OMP 主机：
+
+```
+/migrate-omp-keys <target>
+```
+
+`target` 为单个 SSH 地址（`user@host` 或 SSH alias）；为空时先询问目标，拿不到有效目标就停止。覆盖式替换远端凭据，远端原有记录会被改写/删除，写前先说明并确认；只迁 `auth_credentials`，不迁会话、历史、缓存、模型等运行时状态。远端 OMP 需先关闭，迁完由操作者手动重启；写前先用 SQLite `.backup` 做远端备份。不轮换、不刷新密钥，不打印凭据原文，不运行 `omp -p`，不做测试。
+
+这与仓库快照是两条路径：仓库快照仍不收录数据库，此处是主机间直传。
+
 ## 直接迁移
 
 以下内容直接复制到 `~/.omp/agent/`：
