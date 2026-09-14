@@ -75,7 +75,7 @@ cp -a agent/agents agent/extensions "$HOME/.omp/agent/"
 
 ## 本地扩展的运行时行为
 
-`agent/extensions/` 下两个扩展修正 OMP 与已安装插件的缺陷。它们随 `agent/extensions/` 一起迁移，但在本机还有仓库之外的行为，迁移后需要知道。
+`agent/extensions/` 下的扩展修正 OMP 与已安装插件的缺陷，或补充上下文、计费、主题和压缩等运行时能力。它们随 `agent/extensions/` 一起迁移，但在本机还有仓库之外的行为，迁移后需要知道。
 
 ### `commandcode-model-spec.ts`
 
@@ -92,6 +92,34 @@ cp -a agent/agents agent/extensions "$HOME/.omp/agent/"
 扩展加载时就确定产物状态：缓存里已有可加载产物就直接用；没有则尝试获取一次，优先下载该包发布的预编译件，取不到才用 node-gyp 源码构建（需 Xcode Command Line Tools），`build-origin.txt` 记录来源。之后每次启动既不下载也不构建。并发首次启动在临时目录准备后原子 rename 发布，只保留一份产物。
 
 **拿不到可用二进制时扩展完全不介入**：不接管该包的 require 解析，`exec_command` 的行为与没装这个扩展时完全一致（`tty: true` 报插件自己的错误），只在日志里留一行原因和重试路径。仅 darwin-arm64 生效，其他平台同样不介入。失败会写 marker，下次启动不重复尝试；删除 marker 或整个 keyed 目录可重新尝试。`tty: false` 的管道执行任何情况下都不受影响。依赖 `pi-unified-exec` 已安装。
+
+### `ctx-tool.ts`
+
+注册只读 `ctx` 工具，支持 `ctx list` 与 `ctx show <id>`。它从当前会话、subagent registry、transcript、compaction、sidecar summary 和 task log 组合上下文树，展示状态、摘要、handoff 与任务计数；不修改会话或文件。
+
+### `ctx-tasklog.ts`
+
+监听成功的 `todo`/`goal` 工具结果，把操作、目标、计数和本地时间串行追加到 local root 下的 `task-log/<agent-id>.md`，供 `ctx` 汇总和恢复使用。写入失败只记录 warning，不让工具结果失败。
+
+### `tool-policy-nag.ts`
+
+监听 `bash`/`bash_bg` 中用 `cat`、`sed`、`head`、`tail` 等命令读取文件的行为。前三次只记录状态，超过阈值后发送一次 aside 提示并暂停检测，直到 compaction 或会话边界；状态写入 session custom entry，不拦截命令。
+
+### `commandcode-usage.ts`
+
+为已安装的 `pi-commandcode-provider` 注册运行时用量 provider，调用 Command Code billing endpoint 展示 5 小时与 7 天额度。它复用插件的凭据解析，只在会话启动时注册、关闭时移除，不重新注册模型 provider。
+
+### `xai-oauth-cost-ticks.ts`
+
+包装 `fetch`，从 `xai-oauth` 的 Responses SSE 中捕获 `usage.cost_in_usd_ticks`，并在 `message_end` 持久化前补回 `usage.cost.total`。只处理 `xai-oauth` assistant 消息，重复加载不会重复包装 `fetch`。
+
+### `legacy-plugin-theme.ts`
+
+在会话启动、用户输入和 agent 启动前，将宿主当前 UI theme 同步到 legacy plugin 使用的 theme module graph，避免 Markdown 等输出沿用另一套主题。
+
+### `v2-compaction-timeout.ts`
+
+只把 compaction 使用的 `AbortSignal.timeout(180000)` 延长到 `600000`，其他超时保持原值。安装具有进程级幂等保护，并记录扩展安装与延长事件。
 
 ## 执行安装
 
