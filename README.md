@@ -73,6 +73,26 @@ cp agent/APPEND_SYSTEM.md "$HOME/.omp/agent/APPEND_SYSTEM.md"
 cp -a agent/agents agent/extensions "$HOME/.omp/agent/"
 ```
 
+## 本地扩展的运行时行为
+
+`agent/extensions/` 下两个扩展修正 OMP 与已安装插件的缺陷。它们随 `agent/extensions/` 一起迁移，但在本机还有仓库之外的行为，迁移后需要知道。
+
+### `commandcode-model-spec.ts`
+
+修 `--model` 指定 commandcode 模型时的失败。`models.db` 的 `model_cache` 把 commandcode 模型持久化成 `openai-completions`/`anthropic-messages`，启动期 `--model` 解析信任这些缓存行，于是走宿主 transport 并把字面量 `$COMMANDCODE_API_KEY` 当凭据发出，认证失败；不填 `--model` 时持久化模型走 live registration，所以一直正常。扩展在会话内把这类模型重选回插件的 `commandcode-custom`，不注册 provider、不写默认模型、不改缓存，每次重定向打印一行提示。
+
+成员判定读 `agent/commandcode-models.json`。该文件不迁移，换机器后在插件首次写出它之前扩展静默不生效。这是绕过而非根因修复：根因在宿主把自定义 `api` 的扩展 provider 降级持久化，`omp models commandcode refresh` 不会改写那些行。
+
+### `unified-exec-bun-pty.ts`
+
+修 `pi-unified-exec` 的 `exec_command` 在 `tty: true` 下不可用。两个独立原因：bun 安装插件时不执行 `@homebridge/node-pty-prebuilt-multiarch` 的 lifecycle script，而该包的 npm 产物只带 linux prebuild，本机没有 darwin binding；即使 binding 正确，该包自身通过 tty.ReadStream 读 pty master 的路径在 Bun 下不产生数据，必须直接读 fd。扩展在进程内把该包的 require 缓存指向自带的 direct-fd adapter，插件树和全局 npm 树全程只读。
+
+原生产物不进仓库，也不放 `~/.omp/agent/`（那是本仓库快照的来源），而是落在 `~/.omp/unified-exec-bun-pty-binding/<包版本>-<平台>-<架构>`；路径锚定在 agent 目录的上一级，因此 `PI_CODING_AGENT_DIR` 或 `--profile` 换位置时随之改变。
+
+扩展加载时就确定产物状态：缓存里已有可加载产物就直接用；没有则尝试获取一次，优先下载该包发布的预编译件，取不到才用 node-gyp 源码构建（需 Xcode Command Line Tools），`build-origin.txt` 记录来源。之后每次启动既不下载也不构建。并发首次启动在临时目录准备后原子 rename 发布，只保留一份产物。
+
+**拿不到可用二进制时扩展完全不介入**：不接管该包的 require 解析，`exec_command` 的行为与没装这个扩展时完全一致（`tty: true` 报插件自己的错误），只在日志里留一行原因和重试路径。仅 darwin-arm64 生效，其他平台同样不介入。失败会写 marker，下次启动不重复尝试；删除 marker 或整个 keyed 目录可重新尝试。`tty: false` 的管道执行任何情况下都不受影响。依赖 `pi-unified-exec` 已安装。
+
 ## 执行安装
 
 插件不随仓库复制。执行根目录脚本：
