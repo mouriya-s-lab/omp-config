@@ -7,7 +7,6 @@ command -v omp >/dev/null 2>&1 || {
 }
 
 plugins=(
-  'https://github.com/giuseppe-trisciuoglio/pi-rules'
   'pi-bro'
   'pi-commandcode-provider'
   'pi-package-search'

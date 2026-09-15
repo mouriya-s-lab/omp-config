@@ -121,6 +121,12 @@ cp -a agent/agents agent/extensions "$HOME/.omp/agent/"
 
 只把 compaction 使用的 `AbortSignal.timeout(180000)` 延长到 `600000`，其他超时保持原值。安装具有进程级幂等保护，并记录扩展安装与延长事件。
 
+### `repo-rules.ts`
+
+补齐 OMP 原生 rule discovery 不读的 repo 级目录。原生 project rule 只来自 `.omp/rules`、`.agent(s)/rules`、`.cursor/rules`、`.windsurf/rules`、`.clinerules` 和 `.github/instructions`，且仅当 rule 有 `alwaysApply: true` 或 `description` 时才进 bucket；没有 frontmatter 的文件不进任何 bucket。扩展从 cwd 向 repo root 扫 `.claude/rules`、`.agents/rules`、`.pi/rules`，`alwaysApply`（含无 frontmatter）注入正文，只有 `description` 的列成目录项附文件路径供 `read`。同名文件就近者胜。
+
+注入在 `before_agent_start` 追加一个 `<repo-level-rules>` prompt block，注入前把正文按空白归一后与现有 system prompt 比对，已经出现过的内容跳过，因此与原生 `<generic-rules>`、用户级 `~/.claude/rules`（由 `settings.json` 的 `extensions` 作为 plugin root 载入）不会重复。只处理 project 级目录，用户级 rule 一律交给宿主。
+
 ## 执行安装
 
 插件不随仓库复制。执行根目录脚本：
