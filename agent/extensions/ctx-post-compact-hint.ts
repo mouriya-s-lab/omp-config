@@ -48,8 +48,6 @@ const isMainSession = (ctx: ExtensionContext): boolean => {
 type MessagePayload = {
     readonly listText: string;
     readonly total: number;
-    readonly page: number;
-    readonly totalPages: number;
     readonly showText: string | undefined;
     readonly showId: string | undefined;
 };
@@ -58,13 +56,10 @@ const buildMessage = (payload: MessagePayload): string => {
     // Delimited block so the model treats the payload as an
     // auto-attached artifact, not as a fresh user instruction that
     // must be acted on.
-    const { listText, total, page, totalPages, showText, showId } = payload;
-    const pageHint = totalPages > 1
-        ? ` Page ${page}/${totalPages}; use \`ctx list page=${Math.min(page + 1, totalPages)}\` for the next page.`
-        : '';
+    const { listText, total, showText, showId } = payload;
     const lines: string[] = [
         '<post-compact-ctx>',
-        `Auto-attached after compaction. Same output as \`ctx list\` (${total} context(s)).${pageHint}`,
+        `Auto-attached after compaction. Same output as \`ctx list\` (${total} context(s)).`,
         'Sibling contexts: `ctx show <id>` for their handoff + per-task timeline;',
         'read `history://<id>` only when the timeline is not enough.',
         '',
@@ -101,19 +96,18 @@ export default function ctxPostCompactHint(pi: ExtensionAPI): void {
                 renderCtxListText(ctx),
                 renderCtxShowText(ctx),
             ]);
+            if (!list) return;
             pi.logger.info('Post-compaction ctx injected', {
                 reason,
                 total: list.total,
-                page: list.page,
-                totalPages: list.totalPages,
+                shown: list.shown,
+                hidden: list.hidden,
                 showId: show?.id,
             });
             pi.sendUserMessage(
                 buildMessage({
                     listText: list.text,
                     total: list.total,
-                    page: list.page,
-                    totalPages: list.totalPages,
                     showText: show?.text,
                     showId: show?.id,
                 }),

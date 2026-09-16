@@ -15,7 +15,7 @@ import {
 import { resolveLocalRoot, type LocalProtocolOptions } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 
-const PAGE_SIZE = 20;
+const COLLAPSE_THRESHOLD = 8;
 const SUMMARY_LIMIT = 120;
 const SUMMARY_PREFIX_BYTES = 8 * 1024;
 const SUMMARY_GREP_COLUMNS = 400;
@@ -30,19 +30,26 @@ const SIDECAR_SUMMARY_PATTERN = '"(?:summary|report|report_path|review|verdict|a
  * than reading whole files; a hit is parsed by `parseSessionHeader`.
  */
 const SESSION_HEADER_PATTERN = '"type"\\s*:\\s*"session"';
+/**
+ * Matches the `session_init` record OMP writes after the header line;
+ * `headersFor` greps it to recover the spawned agent flavor
+ * (`"agent":"task:low"`), parsed by `parseSessionInitAgent`.
+ */
+const SESSION_INIT_PATTERN = '"type"\\s*:\\s*"session_init"';
 
 const contextParams = z.object({
 	op: z.enum(["list", "show"]),
 	id: z.string().optional(),
-	page: z.number().int().positive().optional(),
+	all: z.boolean().optional(),
 });
 
 type ContextParams = z.infer<typeof contextParams>;
 type CtxToolDetails = {
 	op: ContextParams["op"];
 	count: number;
-	page?: number;
-	totalPages?: number;
+	shown?: number;
+	hidden?: number;
+	subtree?: string;
 };
 
 type ContextKind = "main" | "sub";
@@ -58,6 +65,7 @@ type FileMetadata = {
 type SpawnHeader = {
 	readonly sessionId?: string;
 	readonly timestampMs?: number;
+	readonly agent?: string;
 };
 
 type TaskCounts = {
@@ -104,6 +112,7 @@ type ContextNode = {
 	readonly spawnedAtMs?: number;
 	readonly spawnHeaderId?: string;
 	readonly lastActivityMs?: number;
+	readonly flavor?: string;
 	readonly summary: SummaryCell;
 	readonly tasks?: TaskCounts;
 	readonly handoff: string;
@@ -121,6 +130,7 @@ type ContextDraft = {
 	readonly spawnHeaderId?: string;
 	readonly lastActivityMs?: number;
 	readonly file?: string;
+	readonly flavor?: string;
 	readonly children: ContextDraft[];
 };
 
@@ -482,6 +492,12 @@ function parseSessionHeader(line: string): SpawnHeader {
 	};
 }
 
+function parseSessionInitAgent(line: string): string | undefined {
+	const parsed = parseJsonObject(line);
+	if (!parsed || parsed.type !== "session_init") return undefined;
+	return textField(parsed.agent);
+}
+
 async function headersFor(
 	root: string | undefined,
 	matches: readonly GlobMatch[],
@@ -503,20 +519,43 @@ async function headersFor(
 	}
 	if (allFresh) return cachedHeaders;
 	try {
-		const result = await grep({
-			pattern: SESSION_HEADER_PATTERN,
-			path: root,
-			glob: "*.jsonl",
-			mode: GrepOutputMode.Content,
-			maxCountPerFile: 1,
-			gitignore: false,
-			hidden: true,
-		});
-		const headers = new Map<string, SpawnHeader>();
-		for (const match of result.matches) {
+		const [sessionResult, initResult] = await Promise.all([
+			grep({
+				pattern: SESSION_HEADER_PATTERN,
+				path: root,
+				glob: "*.jsonl",
+				mode: GrepOutputMode.Content,
+				maxCountPerFile: 1,
+				gitignore: false,
+				hidden: true,
+			}),
+			grep({
+				pattern: SESSION_INIT_PATTERN,
+				path: root,
+				glob: "*.jsonl",
+				mode: GrepOutputMode.Content,
+				maxCountPerFile: 1,
+				gitignore: false,
+				hidden: true,
+			}),
+		]);
+		const agents = new Map<string, string>();
+		for (const match of initResult.matches) {
 			const relativePath = normalizedRelativePath(match.path);
 			if (path.posix.basename(relativePath).startsWith("__advisor")) continue;
-			headers.set(relativePath, parseSessionHeader(match.line));
+			const agent = parseSessionInitAgent(match.line);
+			if (agent) agents.set(relativePath, agent);
+		}
+		const headers = new Map<string, SpawnHeader>();
+		for (const match of sessionResult.matches) {
+			const relativePath = normalizedRelativePath(match.path);
+			if (path.posix.basename(relativePath).startsWith("__advisor")) continue;
+			const base = parseSessionHeader(match.line);
+			const agent = agents.get(relativePath);
+			headers.set(relativePath, agent ? { ...base, agent } : base);
+		}
+		for (const [relativePath, agent] of agents) {
+			if (!headers.has(relativePath)) headers.set(relativePath, { agent });
 		}
 		return headers;
 	} catch {
@@ -647,6 +686,7 @@ function makeDrafts(
 			spawnHeaderId: source.header.sessionId,
 			lastActivityMs,
 			file: source.file,
+			flavor: source.ref?.history?.agent ?? source.header.agent,
 			children: [],
 		};
 		drafts.set(source.id, draft);
@@ -750,18 +790,6 @@ function compactionCountsSuffix(entry: CompactionEntry): string {
 	if (details.readFiles !== undefined) counts.push(`read ${details.readFiles} files`);
 	if (details.modifiedFiles !== undefined) counts.push(`modified ${details.modifiedFiles} files`);
 	return counts.length > 0 ? ` (${counts.join(", ")})` : "";
-}
-
-function compactionSummary(entry: CompactionEntry): SummaryCell {
-	const shortSummary = textField(entry.shortSummary);
-	const summary = textField(entry.summary);
-	const preferred = shortSummary ?? summary;
-	if (!preferred) return { kind: "none" };
-	if (isRemoteCompactionPlaceholder(shortSummary) || isRemoteCompactionPlaceholder(summary)) {
-		const suffix = compactionCountsSuffix(entry);
-		return { kind: "text", text: truncate(`${preferred}${suffix}`) };
-	}
-	return { kind: "text", text: truncate(preferred) };
 }
 
 function compactionHandoff(entry: CompactionEntry): string {
@@ -1259,12 +1287,27 @@ function sidecarNeeds(
 	return { files: [...files], extensions: [...extensions] };
 }
 
+function handoffSummaryCell(handoff: string): SummaryCell {
+	if (handoff === "(none)" || handoff.trim().length === 0) return { kind: "none" };
+	for (const raw of handoff.split(/\r?\n/)) {
+		const line = raw.trim();
+		if (line.length === 0 || line.startsWith("#") || isRemoteCompactionPlaceholder(line)) continue;
+		return { kind: "text", text: truncate(line) };
+	}
+	return { kind: "none" };
+}
+
+// The current session's list summary: prefer a snippet of the actual handoff
+// (goal/progress) over the compaction placeholder shortSummary, falling back to
+// the first user prompt. `ctx show` still renders the full handoff.
 function currentNodeData(inventory: Inventory): NodeData {
-	const summary: SummaryCell = inventory.current.latestCompaction
-		? compactionSummary(inventory.current.latestCompaction)
-		: inventory.current.firstUserPrompt
-			? { kind: "text", text: truncate(inventory.current.firstUserPrompt) }
-			: { kind: "none" };
+	const fromHandoff = handoffSummaryCell(inventory.currentCompactionHandoff);
+	const summary: SummaryCell =
+		fromHandoff.kind === "text"
+			? fromHandoff
+			: inventory.current.firstUserPrompt
+				? { kind: "text", text: truncate(inventory.current.firstUserPrompt) }
+				: { kind: "none" };
 	return { summary, handoff: "(none)" };
 }
 
@@ -1283,6 +1326,7 @@ function materialize(node: ContextDraft, data: ReadonlyMap<string, NodeData>): C
 		handoff: nodeData.handoff,
 		timeline: nodeData.timeline,
 		file: node.file,
+		flavor: node.flavor,
 		children: node.children.map(child => materialize(child, data)),
 	};
 }
@@ -1333,41 +1377,106 @@ function relativeLast(timestampMs: number | undefined): string | undefined {
 	return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
-function renderNodeLine(node: ContextNode, depth: number): string {
-	const fields = [`**${node.id}**`, `${node.kind}/${node.status}`];
-	if (node.tasks) fields.push(`${node.tasks.done}/${node.tasks.total}`);
+function renderNodeLine(node: ContextNode, depth: number, collapsedCount?: number): string {
+	const fields = [`**${node.id}**`, `${node.flavor ?? node.kind}/${node.status}`];
+	if (node.tasks) {
+		fields.push(`${node.tasks.done}/${node.tasks.total}`);
+		const blocked = node.timeline?.open.filter(entry => entry.blocked !== undefined).length ?? 0;
+		if (blocked > 0) fields.push(`${blocked} blocked`);
+	}
 	const last = relativeLast(node.lastActivityMs);
 	if (last) fields.push(last);
 	if (node.summary.kind === "text") fields.push(node.summary.text);
-	return `${"  ".repeat(depth)}- ${fields.join(" · ")}`;
+	const line = `${"  ".repeat(depth)}- ${fields.join(" · ")}`;
+	return collapsedCount === undefined ? line : `${line} · +${collapsedCount} — ctx list ${node.id}`;
 }
 
-type PageWindow = {
-	readonly page: number;
-	readonly totalPages: number;
-	readonly start: number;
-	readonly end: number;
-};
+type FlavorClass = "main" | "task" | "other";
 
-function pageWindow(total: number, requestedPage: number | undefined): PageWindow {
-	const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-	const page = Math.min(Math.max(1, requestedPage ?? 1), totalPages);
-	const start = (page - 1) * PAGE_SIZE;
-	return { page, totalPages, start, end: start + PAGE_SIZE };
+function classifyContext(node: ContextDraft): FlavorClass {
+	if (node.kind === "main") return "main";
+	if (node.id.endsWith(".thinking-translator-trace")) return "other";
+	const flavor = node.flavor;
+	if (flavor === "task" || (flavor?.startsWith("task:") ?? false)) return "task";
+	return "other";
 }
 
-function renderList(root: ContextNode, total: number, window: PageWindow): string {
-	const visible = flattenNode(root).slice(window.start, window.end);
-	const lines = ["# Contexts", ""];
-	for (const { node, depth } of visible) lines.push(renderNodeLine(node, depth));
-	if (window.totalPages > 1) {
-		const shown = visible.length;
-		const rangeStart = shown === 0 ? 0 : window.start + 1;
-		const rangeEnd = window.start + shown;
-		const nextHint = window.page < window.totalPages
-			? ` Use \`ctx list page=${window.page + 1}\` for the next page.`
-			: "";
-		lines.push("", `_Page ${window.page}/${window.totalPages} — contexts ${rangeStart}–${rangeEnd} of ${total}.${nextHint}_`);
+function cloneDraft(node: ContextDraft, children: ContextDraft[]): ContextDraft {
+	return {
+		id: node.id,
+		kind: node.kind,
+		status: node.status,
+		parentId: node.parentId,
+		spawnedAtMs: node.spawnedAtMs,
+		spawnHeaderId: node.spawnHeaderId,
+		lastActivityMs: node.lastActivityMs,
+		file: node.file,
+		flavor: node.flavor,
+		children,
+	};
+}
+
+function cloneSubtree(node: ContextDraft): ContextDraft {
+	return cloneDraft(node, node.children.map(cloneSubtree));
+}
+
+function pruneChildren(
+	node: ContextDraft,
+	isVisible: (candidate: ContextDraft) => boolean,
+): { children: ContextDraft[]; hidden: number } {
+	const out: ContextDraft[] = [];
+	let hidden = 0;
+	for (const child of node.children) {
+		const sub = pruneChildren(child, isVisible);
+		if (isVisible(child)) {
+			out.push(cloneDraft(child, sub.children));
+			hidden += sub.hidden;
+		} else {
+			hidden += 1 + sub.hidden;
+			out.push(...sub.children);
+		}
+	}
+	return { children: out, hidden };
+}
+
+function descendantCount<T extends { readonly children: readonly T[] }>(node: T): number {
+	let count = node.children.length;
+	for (const child of node.children) count += descendantCount(child);
+	return count;
+}
+
+function planRender(root: ContextDraft, threshold: number): { rendered: ContextDraft[]; collapsed: Set<string> } {
+	const rendered: ContextDraft[] = [];
+	const collapsed = new Set<string>();
+	const visit = (node: ContextDraft, isRoot: boolean): void => {
+		rendered.push(node);
+		if (!isRoot && node.children.length > 0 && descendantCount(node) > threshold) {
+			collapsed.add(node.id);
+			return;
+		}
+		for (const child of node.children) visit(child, false);
+	};
+	visit(root, true);
+	return { rendered, collapsed };
+}
+
+function renderList(
+	root: ContextNode,
+	options: { collapsed: ReadonlySet<string>; hiddenCount: number; viewRootId: string; isSubtree: boolean },
+): string {
+	const lines = [options.isSubtree ? `# Contexts · subtree ${options.viewRootId}` : "# Contexts", ""];
+	const visit = (node: ContextNode, depth: number): void => {
+		const collapsed = options.collapsed.has(node.id);
+		lines.push(renderNodeLine(node, depth, collapsed ? descendantCount(node) : undefined));
+		if (collapsed) return;
+		for (const child of node.children) visit(child, depth + 1);
+	};
+	visit(root, 0);
+	if (options.hiddenCount > 0) {
+		lines.push("", `_Hidden ${options.hiddenCount} internal context(s) (mentor/discuss/trace). \`ctx list all=true\` to include them._`);
+	}
+	if (options.isSubtree) {
+		lines.push("", "_\`ctx list\` for the whole tree._");
 	}
 	return lines.join("\n");
 }
@@ -1416,12 +1525,12 @@ function renderShow(node: ContextNode, breadcrumb: readonly string[]): string {
 	].join("\n");
 }
 
-async function hydrateList(inventory: Inventory, visibleDrafts: readonly ContextDraft[]): Promise<ContextNode> {
+async function hydrateData(inventory: Inventory, nodes: readonly ContextDraft[]): Promise<Map<string, NodeData>> {
 	const data = new Map<string, NodeData>();
 	data.set(inventory.current.id, currentNodeData(inventory));
-	const needs = sidecarNeeds(visibleDrafts, inventory);
+	const needs = sidecarNeeds(nodes, inventory);
 	const sidecarMatches = await sidecarSummaryMatches(inventory.artifactRoot, needs.extensions);
-	for (const node of visibleDrafts) {
+	for (const node of nodes) {
 		const summary =
 			node.id === inventory.current.id
 				? data.get(node.id)!.summary
@@ -1439,7 +1548,7 @@ async function hydrateList(inventory: Inventory, visibleDrafts: readonly Context
 			if (cached) transcriptCache.set(node.file, { ...cached, data: value });
 		}
 	}
-	return materialize(inventory.root, data);
+	return data;
 }
 
 async function hydrateShow(inventory: Inventory, target: ContextDraft): Promise<ContextNode> {
@@ -1477,21 +1586,41 @@ async function hydrateShow(inventory: Inventory, target: ContextDraft): Promise<
  * compaction boundary). Keeps the tool as the single source of truth
  * for how the list is built and rendered.
  *
- * Pagination: 1-indexed `page`, fixed `PAGE_SIZE` per page. A missing
- * or out-of-range page is clamped to the nearest valid value; the
- * returned `page` reflects the clamped value the caller should trust
- * for building next-page hints.
+ * Default view hides internal contexts (mentor/discuss/trace),
+ * showing the current session and its `task` subagents; `all` includes
+ * everything. `id` expands the subtree rooted at that context. Returns
+ * `undefined` only when `id` is given but not found, so the caller can
+ * error with the set of known ids.
  */
 export async function renderCtxListText(
 	ctx: ExtensionContext,
-	options: { page?: number } = {},
-): Promise<{ text: string; total: number; page: number; totalPages: number }> {
+	options: { id?: string; all?: boolean } = {},
+): Promise<{ text: string; total: number; shown: number; hidden: number } | undefined> {
 	const inventory = await buildInventory(ctx);
 	const total = inventory.byId.size;
-	const window = pageWindow(total, options.page);
-	const visibleDrafts = flattenDraft(inventory.root).slice(window.start, window.end).map(entry => entry.node);
-	const root = await hydrateList(inventory, visibleDrafts);
-	return { text: renderList(root, total, window), total, page: window.page, totalPages: window.totalPages };
+	const viewRootDraft = options.id ? findDraft(inventory.root, options.id) : inventory.root;
+	if (options.id && !viewRootDraft) return undefined;
+	const root = viewRootDraft ?? inventory.root;
+	let filteredRoot: ContextDraft;
+	let hiddenCount: number;
+	if (options.all) {
+		filteredRoot = cloneSubtree(root);
+		hiddenCount = 0;
+	} else {
+		const pruned = pruneChildren(root, node => classifyContext(node) !== "other");
+		filteredRoot = cloneDraft(root, pruned.children);
+		hiddenCount = pruned.hidden;
+	}
+	const { rendered, collapsed } = planRender(filteredRoot, COLLAPSE_THRESHOLD);
+	const data = await hydrateData(inventory, rendered);
+	const materializedRoot = materialize(filteredRoot, data);
+	const text = renderList(materializedRoot, {
+		collapsed,
+		hiddenCount,
+		viewRootId: root.id,
+		isSubtree: !!options.id,
+	});
+	return { text, total, shown: rendered.length, hidden: hiddenCount };
 }
 
 /**
@@ -1519,15 +1648,28 @@ export default function ctxTool(pi: ExtensionAPI): void {
 		name: "ctx",
 		label: "Context Directory",
 		description:
-			"Use `ctx list` (page 1 = 20 most recent contexts, add `page=<n>` for more) to recall what prior contexts (this session and its subagents) did before opening transcripts; use `ctx show <id>` for a specific context's handoff and per-task timeline (completed vs open, latest state per task).",
+			"Composed, read-only recall view of what prior contexts (this session and its subagents) did — never mutates a session or file. A different axis from `read history://<id>`, which returns the raw transcript verbatim: `ctx` stitches the current session, its subagent registry, transcripts, compaction sidecar summaries, and per-agent task logs into a shallow tree of status, handoff, and task counts.\n" +
+			"- `ctx list`: the current session and its `task` subagents as a shallow tree with status, one-line handoff, and todo progress (done / total / blocked); internal contexts (mentor/discuss/trace) are hidden by default. `ctx list all=true` includes them; `ctx list <id>` expands the subtree rooted at that context (large subtrees collapse with a `ctx list <id>` expand marker). Answer most \"what did we already do?\" questions here before opening any transcript.\n" +
+			"- `ctx show <id>`: one context's full handoff + task log — every `goal`/`todo` op with local timestamp and outcome, plus the compaction sidecar summary. `<id>` is what `ctx list` prints, and what `agent://<id>` and `history://<id>` accept.\n" +
+			"- `read history://<id>` is the fallback, not the default: reach for the raw transcript only when `ctx show` is insufficient — exact wording, the concrete tool arguments issued, an elided message, or raw error text the task log did not capture. Transcripts are large and unindexed; opening one when `ctx` already answers is wasted effort.\n" +
+			"- Scope: this session and its descendants only. Sibling or unrelated sessions never surface here; if you already hold their id, address them directly via `history://<id>` or `agent://<id>`.\n" +
+			"- `todo` and `goal` ops feed the task log `ctx show` reads; update those markers the moment state changes so this recall view stays worth consulting.",
 		parameters: contextParams,
 		approval: "read",
 		loadMode: "essential",
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 			if (signal?.aborted) return { content: [{ type: "text", text: "Cancelled" }] };
 			if (params.op === "list") {
-				const { text, total, page, totalPages } = await renderCtxListText(ctx, { page: params.page });
-				return { content: [{ type: "text", text }], details: { op: params.op, count: total, page, totalPages } satisfies CtxToolDetails };
+				const result = await renderCtxListText(ctx, { id: params.id, all: params.all });
+				if (!result) {
+					const inventory = await buildInventory(ctx);
+					const knownIds = [...inventory.byId.keys()].join(", ") || "(none)";
+					throw new Error(`Unknown context \"${params.id}\". Known ids: ${knownIds}`);
+				}
+				return {
+					content: [{ type: "text", text: result.text }],
+					details: { op: params.op, count: result.total, shown: result.shown, hidden: result.hidden, subtree: params.id } satisfies CtxToolDetails,
+				};
 			}
 			const requestedId = params.id?.trim();
 			if (!requestedId) throw new Error("ctx show requires an id");

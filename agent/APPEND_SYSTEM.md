@@ -75,13 +75,3 @@ The rules above bite because `read` is not a "file cat" — it is a uniform prot
 - **Remote via SSH**: `ssh://host/<path>` reads a remote file or directory (UTF-8, ≤1 MiB) when the host has a verified POSIX shell; bare `ssh://` lists configured hosts. Writable with `write`, searchable with `grep`. Windows or non-POSIX targets fall back to a `bash` SSH command or `sshfs` mount.
 
 If you were reaching for `cat`, `sed -n`, `jq` on a SQLite dump, `unzip`, `ffprobe`, `curl`, or a Python one-liner to open any of these — `read` already delivers the same content in one call, with the snapshot tag `edit` refuses to work without.
-
-## What `ctx` returns (complements `read history://`)
-
-Different axis of recall. `read history://<id>` gives the raw transcript verbatim — every message, every tool call, every result, in order. `ctx` is the composed view: it stitches the current session, its subagent registry, transcripts, compaction sidecar summaries, and per-agent `task-log/<agent-id>.md` into a shallow tree showing status, handoff, and task counts. Read-only — never mutates a session or a file.
-
-- **`ctx list`**: every context reachable from this session (self + subagents + compacted-away stretches) with status, one-line handoff, and todo progress (done / total / blocked). Answer most "what did we already do?" questions here before opening any transcript.
-- **`ctx show <id>`**: one context's full handoff + task log — every `goal` and `todo` op with local timestamp and outcome, plus the sidecar summary that compaction wrote. The `<id>` is the same identifier `ctx list` prints, and it is what `agent://<id>` and `history://<id>` accept.
-- **`read history://<id>` is the fallback, not the default**: reach for the raw transcript only when `ctx show` proves insufficient — you need exact wording, the concrete tool arguments issued, an elided message, or raw error text the task log did not capture. Transcripts are large and unindexed; opening one when `ctx` already answers is the same category of waste as chaining `eval` in place of `read`.
-- **Scope**: this session and its descendants only. Sibling or unrelated sessions never surface in `ctx`; if you already hold their id, address them directly via `history://<id>` or `agent://<id>`.
-- **Auto-population**: `todo` and `goal` op results feed the task log that `ctx show` reads. Updating those markers the moment state changes (per `## Records are the memory`) is what makes `ctx` worth consulting later — batching updates at the end leaves the recall view blank.

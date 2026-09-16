@@ -740,6 +740,10 @@ function buildAgentResultText(results: { source: string; review: string }[]): st
 		"用途说明：这些评审是参考方向，不是权威结论。其中的“改之后”只是对该段的一种可选重写，",
 		"“点评”给出该改写是否偏离原意、应如何理解。请阅读评审文件，逐段自行判断哪些改写值得采纳、",
 		"以何种方式融入，而不是直接用改写替换原文。",
+		"",
+		"处理要求（针对你本人，不得转交）：",
+		"1. 这是你自己的工作，必须由你亲自完成——禁止委托、下发或交给任何子代理 / 其他 agent 代读或代为处理。",
+		"2. 阅读评审时禁止一切截断读取：不得使用 offset/limit、行范围、分页，或只读开头 / 摘要 / 节选；必须把每一份评审文件从头到尾完整读完，再逐段判断。",
 	].join("\n");
 }
 
@@ -754,8 +758,10 @@ export default function docPolish(pi: ExtensionAPI): void {
 		name: "polish_doc",
 		label: "Polish Doc",
 		description:
-			"Restructure a .md/.txt document for engineer readability WITHOUT changing its meaning, " +
-			"then emit a before/after/review file under /tmp/doc-polish and RETURN its path. Splits the " +
+			"Restructure a .md/.txt document for engineer readability WITHOUT changing its meaning. Use it when a " +
+			"document's content is settled and only readability remains — e.g. after finishing a draft and before " +
+			"turning it into the formal document, or when handing a doc off for others to read. It emits a " +
+			"before/after/review file under /tmp/doc-polish and RETURNS its path. Splits the " +
 			"document with a read+write sub-agent, polishes batched paragraphs (<=5000 code points, never " +
 			"truncated) with tool-less sub-agents in parallel, regroups merged paragraphs, then meaning-checks each " +
 			"group. Models are given as full `provider/model:effort` specs; each defaults to the current " +
@@ -833,6 +839,11 @@ export default function docPolish(pi: ExtensionAPI): void {
 				} else {
 					ctx.ui.notify(`doc-polish 失败：${String(err)}`, "error");
 				}
+			} finally {
+				// Progress ran through ctx.ui.setStatus (a persistent footer entry, unlike
+				// the tool path's transient onUpdate). Clear it on the way out — success or
+				// failure — so the footer doesn't keep the last progress line forever.
+				ctx.ui.setStatus?.("doc-polish", undefined);
 			}
 		},
 	});
