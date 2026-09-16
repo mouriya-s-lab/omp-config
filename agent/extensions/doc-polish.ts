@@ -754,8 +754,10 @@ export default function docPolish(pi: ExtensionAPI): void {
 		name: "polish_doc",
 		label: "Polish Doc",
 		description:
-			"Restructure a .md/.txt document for engineer readability WITHOUT changing its meaning, " +
-			"then emit a before/after/review file under /tmp/doc-polish and RETURN its path. Splits the " +
+			"Restructure a .md/.txt document for engineer readability WITHOUT changing its meaning. Use it when a " +
+			"document's content is settled and only readability remains — e.g. after finishing a draft and before " +
+			"turning it into the formal document, or when handing a doc off for others to read. It emits a " +
+			"before/after/review file under /tmp/doc-polish and RETURNS its path. Splits the " +
 			"document with a read+write sub-agent, polishes batched paragraphs (<=5000 code points, never " +
 			"truncated) with tool-less sub-agents in parallel, regroups merged paragraphs, then meaning-checks each " +
 			"group. Models are given as full `provider/model:effort` specs; each defaults to the current " +
