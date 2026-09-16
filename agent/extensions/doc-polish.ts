@@ -164,6 +164,43 @@ function defaultModelSpec(ctx: ExtensionContext): string {
 	throw new Error("doc-polish: no model available to run sub-agents");
 }
 
+// Raised when `doc-polish.json` names a model absent from the model list. Both entry
+// points convert it into an agent-facing message rather than a hard failure.
+class DocPolishConfigError extends Error {}
+
+// Raised when a sub-agent request keeps failing at runtime after retries. Surfaced
+// as a readable, self-contained error — distinct from the pre-run config gate.
+class DocPolishRuntimeError extends Error {}
+
+// Existence check only — resolves against the model registry, never sends a request.
+// A comma fallback chain counts as present when any candidate resolves.
+function modelExists(ctx: ExtensionContext, spec: string): boolean {
+	return spec
+		.split(",")
+		.map(s => s.trim())
+		.filter(Boolean)
+		.some(candidate => {
+			const { base } = splitEffort(candidate);
+			return (ctx.models?.resolve?.(base) ?? findInRegistry(ctx, base)) !== undefined;
+		});
+}
+
+function configModelIssueMessage(invalid: { role: string; spec: string }[]): string {
+	const list = invalid.map(i => `- \`${i.role}\`: \`${i.spec}\``).join("\n");
+	return [
+		"doc-polish 本次调用直接中止、未做任何润色（不是挂起，没有可恢复的状态；修正后需重新调用）：配置文件 `doc-polish.json` 里的这些模型不在当前可用模型列表中",
+		"（仅核对模型列表是否存在，未发送任何测试请求）：",
+		list,
+		"",
+		"请先向用户解释这三个模型设置各自的作用，再把决定权交给用户，不要自行替换或猜测：",
+		"- `splitModel`（拆分）：读取文档、按相关性切成小块、标注每块在原文的起止行号、抽取关键词词表；需要 read+write 工具能力。",
+		"- `polishModel`（润色）：在不改变原意的前提下，把每个批次重排/润色成工程师更易读的文本，并给出词表变更；无工具。",
+		"- `checkModel`（校验）：对合并后的每个编组判断语义是否保持、如何理解；无工具。未设置时回退到 `splitModel`。",
+		"",
+		"把选择权交给用户：可改用某个可用模型、修改 `doc-polish.json`、或调用时显式传入模型参数；用户确认后再重试（`omp models` 可查看可用模型）。",
+	].join("\n");
+}
+
 // --- sub-agent runner (createAgentSession, reusing host providers) ----------
 
 function extractAssistantText(messages: unknown): string {
@@ -182,10 +219,19 @@ function extractAssistantText(messages: unknown): string {
 	return "";
 }
 
-async function runSubSession(
-	ctx: ExtensionContext,
-	opts: { resolved: ResolvedModel; toolNames: string[]; prompt: string; agentId: string; cwd: string },
-): Promise<string> {
+const SUBAGENT_MAX_ATTEMPTS = 3;
+
+type SubSessionOptions = {
+	resolved: ResolvedModel;
+	role: string;
+	toolNames: string[];
+	prompt: string;
+	agentId: string;
+	cwd: string;
+};
+
+// One attempt: a fresh restricted, in-memory session bound to the resolved model.
+async function runSubSessionOnce(ctx: ExtensionContext, opts: SubSessionOptions): Promise<string> {
 	const { session } = await createAgentSession({
 		cwd: opts.cwd,
 		modelRegistry: ctx.modelRegistry,
@@ -215,8 +261,42 @@ async function runSubSession(
 		unsubscribe();
 		await session.dispose();
 	}
+	// A provider failure (403, rate limit, etc.) does not throw out of prompt(); it
+	// lands as an assistant turn with stopReason "error". Re-surface it as a throw so
+	// runSubSession's retry and readable-error path engage, instead of the caller
+	// mistaking an empty result for a merely unparseable one.
+	const msgs = Array.isArray(finalMessages) ? finalMessages : [];
+	for (let i = msgs.length - 1; i >= 0; i--) {
+		const m = msgs[i] as { role?: string; stopReason?: string; errorMessage?: string };
+		if (m?.role !== "assistant") continue;
+		if (m.stopReason === "error") throw new Error(m.errorMessage || "模型返回错误（stopReason=error）");
+		break;
+	}
 	const text = deltas.trim();
 	return text || extractAssistantText(finalMessages).trim();
+}
+
+// Real runtime consumption: a genuinely failing request is retried up to
+// SUBAGENT_MAX_ATTEMPTS times; still failing, it throws a readable, self-contained
+// error. A response that merely fails to parse is handled by the caller, not here.
+async function runSubSession(ctx: ExtensionContext, opts: SubSessionOptions): Promise<string> {
+	let lastError: unknown;
+	for (let attempt = 1; attempt <= SUBAGENT_MAX_ATTEMPTS; attempt++) {
+		try {
+			return await runSubSessionOnce(ctx, opts);
+		} catch (err) {
+			lastError = err;
+			if (attempt < SUBAGENT_MAX_ATTEMPTS) {
+				const { promise, resolve } = Promise.withResolvers<void>();
+				setTimeout(resolve, 400 * attempt);
+				await promise;
+			}
+		}
+	}
+	const detail = lastError instanceof Error ? lastError.message : String(lastError);
+	throw new DocPolishRuntimeError(
+		`doc-polish：${opts.role}子代理（模型 \`${opts.resolved.spec}\`）连续 ${SUBAGENT_MAX_ATTEMPTS} 次调用失败，未成功：${detail}`,
+	);
 }
 
 // --- JSON parsing (tolerant of code fences) ---------------------------------
@@ -454,6 +534,7 @@ async function polishOneFile(
 	progress(`[${basename(absPath)}] 拆分中…`);
 	await runSubSession(ctx, {
 		resolved: models.split,
+		role: "拆分",
 		toolNames: ["read", "write"],
 		prompt: splitPrompt(absPath, splitOut, ext === ".md" ? "Markdown" : "plain-text", originalLines.length),
 		agentId: `docpolish-split-${stamp}`,
@@ -492,6 +573,7 @@ async function polishOneFile(
 		const kws = relevantKeywords(keywords, batchText);
 		const raw = await runSubSession(ctx, {
 			resolved: models.polish,
+			role: "润色",
 			toolNames: [],
 			prompt: polishPrompt(batch, kws),
 			agentId: `docpolish-polish-${stamp}-${i}`,
@@ -521,6 +603,7 @@ async function polishOneFile(
 	const reviews = await mapLimit<Group, string>(groups, concurrency, async (g, i) => {
 		const review = await runSubSession(ctx, {
 			resolved: models.check,
+			role: "校验",
 			toolNames: [],
 			prompt: checkPrompt(g.original, g.polished),
 			agentId: `docpolish-check-${stamp}-${i}`,
@@ -618,6 +701,16 @@ async function polishDocuments(
 	progress: Progress,
 ): Promise<{ source: string; review: string }[]> {
 	const config = loadConfig(ctx.cwd);
+	const invalidConfigModels = (
+		[
+			["splitModel", config.splitModel],
+			["polishModel", config.polishModel],
+			["checkModel", config.checkModel],
+		] as const
+	)
+		.filter(([, spec]) => spec !== undefined && !modelExists(ctx, spec))
+		.map(([role, spec]) => ({ role, spec: spec as string }));
+	if (invalidConfigModels.length > 0) throw new DocPolishConfigError(configModelIssueMessage(invalidConfigModels));
 	const fallback = defaultModelSpec(ctx);
 	const splitSpec = options.splitModel ?? config.splitModel;
 	const models = {
@@ -695,11 +788,21 @@ export default function docPolish(pi: ExtensionAPI): void {
 		async execute(_toolCallId, params, _signal, onUpdate, ctx) {
 			const progress: Progress = message =>
 				onUpdate?.({ content: [{ type: "text", text: message }] });
-			const results = await polishDocuments(ctx as ExtensionContext, params as PolishOptions, progress);
-			return {
-				content: [{ type: "text", text: buildAgentResultText(results) }],
-				details: { results, reviewPaths: results.map(r => r.review), reference: true },
-			};
+			try {
+				const results = await polishDocuments(ctx as ExtensionContext, params as PolishOptions, progress);
+				return {
+					content: [{ type: "text", text: buildAgentResultText(results) }],
+					details: { results, reviewPaths: results.map(r => r.review), reference: true },
+				};
+			} catch (err) {
+				if (err instanceof DocPolishConfigError) {
+					return { content: [{ type: "text", text: err.message }], details: { configError: true } };
+				}
+				if (err instanceof DocPolishRuntimeError) {
+					return { content: [{ type: "text", text: err.message }], details: { runtimeError: true }, isError: true };
+				}
+				throw err;
+			}
 		},
 	});
 
@@ -723,7 +826,13 @@ export default function docPolish(pi: ExtensionAPI): void {
 				// reference), rather than displaying it to the human.
 				void pi.sendUserMessage(buildAgentResultText(results));
 			} catch (err) {
-				ctx.ui.notify(`doc-polish 失败：${String(err)}`, "error");
+				if (err instanceof DocPolishConfigError) {
+					void pi.sendUserMessage(err.message);
+				} else if (err instanceof DocPolishRuntimeError) {
+					ctx.ui.notify(err.message, "error");
+				} else {
+					ctx.ui.notify(`doc-polish 失败：${String(err)}`, "error");
+				}
 			}
 		},
 	});

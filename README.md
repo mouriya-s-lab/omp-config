@@ -162,7 +162,9 @@ compact 完成后调用 `ctx-tool.ts` 导出的 `renderCtxListText` 与 `renderC
 
 三个子代理各自是一个受限的内存态 `createAgentSession`，复用宿主的 provider/模型（`ctx.modelRegistry`，不额外请求），模型以 `provider/model:effort` 全名指定，可给逗号分隔的回退链：
 
-模型与并发可由与扩展同目录的 `doc-polish.json` 预定义（键 `splitModel`/`polishModel`/`checkModel`/`concurrency`；cwd 下同名文件优先）。优先级：显式参数 > `doc-polish.json` > 当前会话模型。
+模型与并发可由与扩展同目录的 `doc-polish.json` 预定义（键 `splitModel`/`polishModel`/`checkModel`/`concurrency`；cwd 下同名文件优先）。优先级：显式参数 > `doc-polish.json` > 当前会话模型。加载时仅按模型列表核对 `doc-polish.json` 里的模型是否存在（不发测试请求）；若不存在则**直接中止本次调用、不润色**（无挂起状态，需修正后重新调用），并把一段说明返回给主 agent——请其向用户解释三个模型设置的作用、并把决定权交给用户。
+
+模型存在于列表、但运行时请求失败（如 403 未在套餐内、限流、网络错误——子代理里这类失败不抛异常，而是以 stopReason 为 error 的助手轮次落地）是另一类情况：对该子代理重试至多 3 次，仍失败则报一段可读、自足、不误导的错误（含子代理角色、模型全名、连续失败次数与 provider 原始报错），无需额外排查。`polish_doc` 工具把它作为 `isError` 工具结果返回；`/polish-doc` 命令通过 `ctx.ui.notify` 直接告知用户。
 
 - **拆分代理**：标准子代理，仅 `read`+`write`；prompt 不含原文，自己读文件并写出带原始行号（起止）的切分索引与完整关键词词表。
 - **润色代理**：无工具；按 ≤5000 码点分批、不截断、超长段独立成批，每批只发送与该批相关的词表，返回润色文本与词表变更记录。
