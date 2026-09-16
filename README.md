@@ -156,6 +156,24 @@ compact 完成后调用 `ctx-tool.ts` 导出的 `renderCtxListText` 与 `renderC
 
 注入在 `before_agent_start` 追加一个 `<repo-level-rules>` prompt block，注入前把正文按空白归一后与现有 system prompt 比对，已经出现过的内容跳过，因此与原生 `<generic-rules>`、用户级 `~/.claude/rules`（由 `settings.json` 的 `extensions` 作为 plugin root 载入）不会重复。只处理 project 级目录，用户级 rule 一律交给宿主。
 
+### `doc-polish.ts`
+
+注册模型可调用的 `polish_doc` 工具与人可调用的 `/polish-doc <path…>` 命令。对 `.md`/`.txt` 文档在不改变原意的前提下，按工程师可读性重排、润色，产出 `改之前 / 改之后 / 点评` 三段式评审文件到 `/tmp/doc-polish/<时间戳>-<名>/`（原文先拷贝一份到同目录）。
+
+三个子代理各自是一个受限的内存态 `createAgentSession`，复用宿主的 provider/模型（`ctx.modelRegistry`，不额外请求），模型以 `provider/model:effort` 全名指定，可给逗号分隔的回退链：
+
+模型与并发可由与扩展同目录的 `doc-polish.json` 预定义（键 `splitModel`/`polishModel`/`checkModel`/`concurrency`；cwd 下同名文件优先）。优先级：显式参数 > `doc-polish.json` > 当前会话模型。加载时仅按模型列表核对 `doc-polish.json` 里的模型是否存在（不发测试请求）；若不存在则**直接中止本次调用、不润色**（无挂起状态，需修正后重新调用），并把一段说明返回给主 agent——请其向用户解释三个模型设置的作用、并把决定权交给用户。
+
+模型存在于列表、但运行时请求失败（如 403 未在套餐内、限流、网络错误——子代理里这类失败不抛异常，而是以 stopReason 为 error 的助手轮次落地）是另一类情况：对该子代理重试至多 3 次，仍失败则报一段可读、自足、不误导的错误（含子代理角色、模型全名、连续失败次数与 provider 原始报错），无需额外排查。`polish_doc` 工具把它作为 `isError` 工具结果返回；`/polish-doc` 命令通过 `ctx.ui.notify` 直接告知用户。
+
+- **拆分代理**：标准子代理，仅 `read`+`write`；prompt 不含原文，自己读文件并写出带原始行号（起止）的切分索引与完整关键词词表。
+- **润色代理**：无工具；按 ≤5000 码点分批、不截断、超长段独立成批，每批只发送与该批相关的词表，返回润色文本与词表变更记录。
+- **校验代理**：无工具；对合并后的编组判定语义是否保持、如何理解；未指定时缺省回退到拆分模型。
+
+拆分之后全部为程序行为：把块按 ≤5000 码点打包后，**结构化并发**地并行分析——所有润色批次并发执行、汇齐后重编组，再对所有编组并发校验，全部完成后按原始索引依次写回（并发上限默认 6，可用 `concurrency` 调整）。按原始行号取权威原文、并查集依 `sourceIndices` 识别段落合并并重新编组、逐组语义校验、渲染评审。子代理均 `restrictToolNames` + `disableExtensionDiscovery`，不会递归加载本扩展。仓库之外的运行时副作用：向 `/tmp/doc-polish/` 写文件，并按批消耗所指定模型的额度。
+
+返回语义：模型调用 `polish_doc` 时，评审文件路径与「参考方向、非权威结论」的使用说明作为工具结果返回，由调用模型自行判断如何采纳。人用 `/polish-doc` 调用时不直接展示给人，而是把同样的结果作为新输入交给当前会话的主 agent（`pi.sendUserMessage`），由主 agent 阅读评审并决定如何使用。
+
 ## 执行安装
 
 插件不随仓库复制。执行根目录脚本：
