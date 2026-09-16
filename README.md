@@ -95,11 +95,15 @@ cp -a agent/agents agent/extensions "$HOME/.omp/agent/"
 
 ### `ctx-tool.ts`
 
-注册只读 `ctx` 工具，支持 `ctx list` 与 `ctx show <id>`。它从当前会话、subagent registry、transcript、compaction、sidecar summary 和 task log 组合上下文树，展示状态、摘要、handoff 与任务计数；不修改会话或文件。
+注册只读 `ctx` 工具，支持 `ctx list [page=N]` 与 `ctx show <id>`。它从当前会话、subagent registry、transcript、compaction、sidecar summary 和 task log 组合上下文树。`list` 每行给出状态、summary 和任务计数（`done/total`），每页固定 20 条 DFS 前序结果，未指定或越界的 `page` 会被夹到有效区间，末行给出 `Page N/M — contexts a–b of N` 和下一页提示。`show` 输出 handoff 与 `## Tasks` 时间线：从 task-log 事件重放出每个任务的最新状态，`Completed` 与 `Open` 两段按本地时间升序展开，同一任务只保留最终状态（`start`/`block`/`unblock` 折叠为 open；`done` 覆盖为 completed；`drop`/`rm` 从时间线剔除），`block` 的原因作为 open 项后缀展示。不修改会话或文件。
 
 ### `ctx-tasklog.ts`
 
 监听成功的 `todo`/`goal` 工具结果，把操作、目标、计数和本地时间串行追加到 local root 下的 `task-log/<agent-id>.md`，供 `ctx` 汇总和恢复使用。写入失败只记录 warning，不让工具结果失败。
+
+### `ctx-post-compact-hint.ts`
+
+compact 完成后调用 `ctx-tool.ts` 导出的 `renderCtxListText` 与 `renderCtxShowText`，在 `<post-compact-ctx>` 块里同时注入 `## List`（默认 page 1，与 `ctx list` 逐字一致）和 `## Current session`（主会话的 handoff + Tasks 时间线，与 `ctx show <main-id>` 逐字一致）；`list` 总页数 > 1 时在头部注明当前页和下一页命令，subagent 详情仍需模型自己 `ctx show <id>` 拉取。同时监听 `session_compact` 与成功的 `auto_compaction_end`（跳过 aborted/skipped/无 result），用 5 秒窗口去重两个事件；只对主会话生效，subagent 不注入。渲染失败只记录 warning，不影响 session。
 
 ### `tool-policy-nag.ts`
 

@@ -15,7 +15,7 @@ import {
 import { resolveLocalRoot, type LocalProtocolOptions } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 
-const MAX_CONTEXT_ROWS = 50;
+const PAGE_SIZE = 20;
 const SUMMARY_LIMIT = 120;
 const SUMMARY_PREFIX_BYTES = 8 * 1024;
 const SUMMARY_GREP_COLUMNS = 400;
@@ -23,16 +23,26 @@ const SUMMARY_KEYS = ["summary", "report", "report_path", "review", "verdict", "
 const STRUCTURED_SUMMARY_KEYS = ["implementation", "result", "outcome", "conclusion", "notes"] as const;
 const SUMMARY_SCAN_LIMIT = 64;
 const SIDECAR_SUMMARY_PATTERN = '"(?:summary|report|report_path|review|verdict|assessment|advice|status|findings)"\\s*:';
+/**
+ * Matches the first-line session header JSON object emitted by OMP into
+ * each `*.jsonl` transcript (`{"type":"session","id":"…","timestamp":…}`).
+ * `grep` in `headersFor` uses this to pull just the header line rather
+ * than reading whole files; a hit is parsed by `parseSessionHeader`.
+ */
+const SESSION_HEADER_PATTERN = '"type"\\s*:\\s*"session"';
 
 const contextParams = z.object({
 	op: z.enum(["list", "show"]),
 	id: z.string().optional(),
+	page: z.number().int().positive().optional(),
 });
 
 type ContextParams = z.infer<typeof contextParams>;
 type CtxToolDetails = {
 	op: ContextParams["op"];
 	count: number;
+	page?: number;
+	totalPages?: number;
 };
 
 type ContextKind = "main" | "sub";
@@ -55,9 +65,20 @@ type TaskCounts = {
 	total: number;
 };
 
+type TimelineEntry = {
+	readonly text: string;
+	readonly atMs: number;
+	readonly blocked?: string;
+};
+
+type TaskTimeline = {
+	readonly done: readonly TimelineEntry[];
+	readonly open: readonly TimelineEntry[];
+};
+
 type TaskLogEvent =
-	| { tool: "todo"; op: "init" | "start" | "done" | "drop" | "block" | "unblock" | "append" | "rm" | "view"; detail: string }
-	| { tool: "goal"; op: "create" | "get" | "resume" | "complete" | "drop"; detail: string };
+	| { tool: "todo"; op: "init" | "start" | "done" | "drop" | "block" | "unblock" | "append" | "rm" | "view"; detail: string; atMs: number }
+	| { tool: "goal"; op: "create" | "get" | "resume" | "complete" | "drop"; detail: string; atMs: number };
 
 type CurrentSessionState = {
 	id: string;
@@ -71,8 +92,8 @@ type CurrentSessionState = {
 type NodeData = {
 	readonly summary: SummaryCell;
 	readonly handoff: string;
-	readonly taskLog?: string;
 	readonly tasks?: TaskCounts;
+	readonly timeline?: TaskTimeline;
 };
 
 type ContextNode = {
@@ -86,7 +107,7 @@ type ContextNode = {
 	readonly summary: SummaryCell;
 	readonly tasks?: TaskCounts;
 	readonly handoff: string;
-	readonly taskLog?: string;
+	readonly timeline?: TaskTimeline;
 	readonly file?: string;
 	readonly children: readonly ContextNode[];
 };
@@ -116,8 +137,8 @@ type SidecarCacheEntry = FileMetadata & {
 };
 
 type TaskLogCacheEntry = FileMetadata & {
-	readonly text: string;
 	readonly counts: TaskCounts;
+	readonly timeline: TaskTimeline;
 };
 
 type TranscriptSource = {
@@ -810,7 +831,7 @@ async function deriveSidecarSummary(file: string, metadata: FileMetadata, match:
 		}
 	}
 	const prefix = await readPrefixTextFile(file);
-	const summary = prefix === undefined ? { kind: "none" } : summaryCellFromText(prefix);
+	const summary: SummaryCell = prefix === undefined ? { kind: "none" } : summaryCellFromText(prefix);
 	return {
 		...metadata,
 		summary,
@@ -848,25 +869,35 @@ async function taskLogFor(
 	localRoot: string,
 	id: string,
 	snapshots: FileSnapshot,
-): Promise<{ text: string | undefined; counts: TaskCounts | undefined }> {
+): Promise<{ counts: TaskCounts | undefined; timeline: TaskTimeline | undefined }> {
 	const file = taskLogPath(localRoot, id);
 	const metadata = snapshots.metadataByPath.get(file);
-	if (!metadata) return { text: undefined, counts: undefined };
+	if (!metadata) return { counts: undefined, timeline: undefined };
 	const cached = taskLogCache.get(file);
-	if (cached && sameMetadata(cached, metadata)) return { text: cached.text, counts: cached.counts };
+	if (cached && sameMetadata(cached, metadata)) return { counts: cached.counts, timeline: cached.timeline };
 	const text = await readTextFile(file);
-	if (text === undefined) return { text: undefined, counts: undefined };
+	if (text === undefined) return { counts: undefined, timeline: undefined };
 	const counts = taskLogCounts(text);
-	taskLogCache.set(file, { ...metadata, text, counts });
-	return { text, counts };
+	const timeline = taskLogTimeline(text);
+	taskLogCache.set(file, { ...metadata, counts, timeline });
+	return { counts, timeline };
+}
+
+function parseLogTimestamp(date: string, time: string): number {
+	// Task-log timestamps are already local wall time (see ctx-tasklog
+	// `formatLocalTimestamp`); parsing without a suffix keeps them in the
+	// same local zone. Non-matching lines are already filtered upstream.
+	const parsed = Date.parse(`${date}T${time}`);
+	return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function parseTaskLogEvent(line: string): TaskLogEvent | undefined {
-	const match = /^-\s+\S+\s+\S+\s+(todo|goal)\s+([a-z]+):\s*(.*)$/i.exec(line.trim());
+	const match = /^-\s+(\S+)\s+(\S+)\s+(todo|goal)\s+([a-z]+):\s*(.*)$/i.exec(line.trim());
 	if (!match) return undefined;
-	const tool = match[1]?.toLowerCase();
-	const op = match[2]?.toLowerCase();
-	const detail = match[3] ?? "";
+	const atMs = parseLogTimestamp(match[1]!, match[2]!);
+	const tool = match[3]?.toLowerCase();
+	const op = match[4]?.toLowerCase();
+	const detail = match[5] ?? "";
 	if (tool === "todo") {
 		if (
 			op === "init" ||
@@ -879,12 +910,12 @@ function parseTaskLogEvent(line: string): TaskLogEvent | undefined {
 			op === "rm" ||
 			op === "view"
 		) {
-			return { tool, op, detail };
+			return { tool, op, detail, atMs };
 		}
 		return undefined;
 	}
 	if (tool === "goal" && (op === "create" || op === "get" || op === "resume" || op === "complete" || op === "drop")) {
-		return { tool, op, detail };
+		return { tool, op, detail, atMs };
 	}
 	return undefined;
 }
@@ -997,6 +1028,94 @@ function taskLogCounts(content: string): TaskCounts {
 		}
 	}
 	return { done: Math.min(done, total), total: Math.max(total, 0) };
+}
+
+function parseBlockReason(detail: string): string | undefined {
+	const match = /"\s*\(([^)]+)\)\s*$/.exec(detail.trim());
+	return match?.[1]?.trim();
+}
+
+type InternalTaskState = {
+	status: "done" | "open" | "removed";
+	atMs: number;
+	blocked?: string;
+};
+
+/**
+ * Materializes the per-task latest state from a task-log so the timeline
+ * shows what actually got done vs. what is still open, with each task
+ * appearing once. Updates (block/unblock, re-start) and removals
+ * (rm, drop) collapse into the latest observable state; removed and
+ * dropped tasks are elided from the rendered timeline.
+ *
+ * `init` clears everything since it replaces the whole task list.
+ * `append` carries no task names (only a count) so it cannot seed
+ * entries here; those tasks surface once they are touched.
+ * `done all tasks` marks every non-removed task done at that moment.
+ */
+export function taskLogTimeline(content: string): TaskTimeline {
+	const tasks = new Map<string, InternalTaskState>();
+	for (const line of content.split(/\r?\n/)) {
+		const event = parseTaskLogEvent(line);
+		if (!event || event.tool !== "todo") continue;
+		switch (event.op) {
+			case "init":
+				tasks.clear();
+				break;
+			case "append":
+			case "view":
+				break;
+			case "start":
+			case "unblock": {
+				const target = taskTarget(event.detail);
+				if (!target) break;
+				const prev = tasks.get(target);
+				if (prev?.status === "done" || prev?.status === "removed") break;
+				tasks.set(target, { status: "open", atMs: event.atMs });
+				break;
+			}
+			case "block": {
+				const target = taskTarget(event.detail);
+				if (!target) break;
+				const prev = tasks.get(target);
+				if (prev?.status === "done" || prev?.status === "removed") break;
+				tasks.set(target, { status: "open", atMs: event.atMs, blocked: parseBlockReason(event.detail) });
+				break;
+			}
+			case "done": {
+				if (isAllTasks(event.detail)) {
+					for (const [key, value] of tasks) {
+						if (value.status !== "removed") tasks.set(key, { status: "done", atMs: event.atMs });
+					}
+					break;
+				}
+				const target = taskTarget(event.detail);
+				if (!target) break;
+				tasks.set(target, { status: "done", atMs: event.atMs });
+				break;
+			}
+			case "drop":
+			case "rm": {
+				if (isAllTasks(event.detail)) {
+					tasks.clear();
+					break;
+				}
+				const target = taskTarget(event.detail);
+				if (!target) break;
+				tasks.set(target, { status: "removed", atMs: event.atMs });
+				break;
+			}
+		}
+	}
+	const done: TimelineEntry[] = [];
+	const open: TimelineEntry[] = [];
+	for (const [text, state] of tasks) {
+		if (state.status === "done") done.push({ text, atMs: state.atMs });
+		else if (state.status === "open") open.push({ text, atMs: state.atMs, blocked: state.blocked });
+	}
+	done.sort((a, b) => a.atMs - b.atMs);
+	open.sort((a, b) => a.atMs - b.atMs);
+	return { done, open };
 }
 
 async function subagentHandoff(
@@ -1162,7 +1281,7 @@ function materialize(node: ContextDraft, data: ReadonlyMap<string, NodeData>): C
 		summary: nodeData.summary,
 		tasks: nodeData.tasks,
 		handoff: nodeData.handoff,
-		taskLog: nodeData.taskLog,
+		timeline: nodeData.timeline,
 		file: node.file,
 		children: node.children.map(child => materialize(child, data)),
 	};
@@ -1223,11 +1342,59 @@ function renderNodeLine(node: ContextNode, depth: number): string {
 	return `${"  ".repeat(depth)}- ${fields.join(" · ")}`;
 }
 
-function renderList(root: ContextNode, total: number): string {
-	const visible = flattenNode(root).slice(0, MAX_CONTEXT_ROWS);
+type PageWindow = {
+	readonly page: number;
+	readonly totalPages: number;
+	readonly start: number;
+	readonly end: number;
+};
+
+function pageWindow(total: number, requestedPage: number | undefined): PageWindow {
+	const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+	const page = Math.min(Math.max(1, requestedPage ?? 1), totalPages);
+	const start = (page - 1) * PAGE_SIZE;
+	return { page, totalPages, start, end: start + PAGE_SIZE };
+}
+
+function renderList(root: ContextNode, total: number, window: PageWindow): string {
+	const visible = flattenNode(root).slice(window.start, window.end);
 	const lines = ["# Contexts", ""];
 	for (const { node, depth } of visible) lines.push(renderNodeLine(node, depth));
-	if (total > MAX_CONTEXT_ROWS) lines.push("", `_Note: showing ${MAX_CONTEXT_ROWS} of ${total} contexts._`);
+	if (window.totalPages > 1) {
+		const shown = visible.length;
+		const rangeStart = shown === 0 ? 0 : window.start + 1;
+		const rangeEnd = window.start + shown;
+		const nextHint = window.page < window.totalPages
+			? ` Use \`ctx list page=${window.page + 1}\` for the next page.`
+			: "";
+		lines.push("", `_Page ${window.page}/${window.totalPages} — contexts ${rangeStart}–${rangeEnd} of ${total}.${nextHint}_`);
+	}
+	return lines.join("\n");
+}
+
+function pad2(value: number): string {
+	return String(value).padStart(2, "0");
+}
+
+function formatTimelineTime(atMs: number): string {
+	if (!Number.isFinite(atMs) || atMs === 0) return "—";
+	const date = new Date(atMs);
+	return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} ${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+}
+
+function renderTimeline(timeline: TaskTimeline | undefined): string {
+	if (!timeline || (timeline.done.length === 0 && timeline.open.length === 0)) return "(none)";
+	const lines: string[] = [];
+	lines.push(`### Completed (${timeline.done.length})`);
+	if (timeline.done.length === 0) lines.push("- (none)");
+	else for (const entry of timeline.done) lines.push(`- ${formatTimelineTime(entry.atMs)} · ${entry.text}`);
+	lines.push("");
+	lines.push(`### Open (${timeline.open.length})`);
+	if (timeline.open.length === 0) lines.push("- (none)");
+	else for (const entry of timeline.open) {
+		const blocked = entry.blocked ? ` · blocked: ${entry.blocked}` : "";
+		lines.push(`- ${formatTimelineTime(entry.atMs)} · ${entry.text}${blocked}`);
+	}
 	return lines.join("\n");
 }
 
@@ -1241,9 +1408,9 @@ function renderShow(node: ContextNode, breadcrumb: readonly string[]): string {
 		"",
 		node.handoff,
 		"",
-		"## Task log",
+		"## Tasks",
 		"",
-		node.taskLog ?? "(none)",
+		renderTimeline(node.timeline),
 		"",
 		`Transcript: history://${node.id}`,
 	].join("\n");
@@ -1263,8 +1430,8 @@ async function hydrateList(inventory: Inventory, visibleDrafts: readonly Context
 		const value: NodeData = {
 			summary,
 			handoff: "(none)",
-			taskLog: taskLog.text,
 			tasks: taskLog.counts,
+			timeline: taskLog.timeline,
 		};
 		data.set(node.id, value);
 		if (node.file) {
@@ -1283,8 +1450,8 @@ async function hydrateShow(inventory: Inventory, target: ContextDraft): Promise<
 		data.set(target.id, {
 			summary: data.get(target.id)!.summary,
 			handoff: inventory.currentCompactionHandoff,
-			taskLog: taskLog.text,
 			tasks: taskLog.counts,
+			timeline: taskLog.timeline,
 		});
 	} else {
 		const directory = target.file ? path.dirname(target.file) : inventory.artifactRoot ?? inventory.localRoot;
@@ -1292,8 +1459,8 @@ async function hydrateShow(inventory: Inventory, target: ContextDraft): Promise<
 		data.set(target.id, {
 			summary: handoff.summary,
 			handoff: handoff.handoff,
-			taskLog: taskLog.text,
 			tasks: taskLog.counts,
+			timeline: taskLog.timeline,
 		});
 		if (target.file) {
 			const cached = transcriptCache.get(target.file);
@@ -1303,35 +1470,75 @@ async function hydrateShow(inventory: Inventory, target: ContextDraft): Promise<
 	return materialize(inventory.root, data);
 }
 
+/**
+ * `ctx list` rendering as a plain string, for callers that need the
+ * same text the tool produces but from outside the tool call path
+ * (e.g. ctx-post-compact-hint injecting the tree right after a
+ * compaction boundary). Keeps the tool as the single source of truth
+ * for how the list is built and rendered.
+ *
+ * Pagination: 1-indexed `page`, fixed `PAGE_SIZE` per page. A missing
+ * or out-of-range page is clamped to the nearest valid value; the
+ * returned `page` reflects the clamped value the caller should trust
+ * for building next-page hints.
+ */
+export async function renderCtxListText(
+	ctx: ExtensionContext,
+	options: { page?: number } = {},
+): Promise<{ text: string; total: number; page: number; totalPages: number }> {
+	const inventory = await buildInventory(ctx);
+	const total = inventory.byId.size;
+	const window = pageWindow(total, options.page);
+	const visibleDrafts = flattenDraft(inventory.root).slice(window.start, window.end).map(entry => entry.node);
+	const root = await hydrateList(inventory, visibleDrafts);
+	return { text: renderList(root, total, window), total, page: window.page, totalPages: window.totalPages };
+}
+
+/**
+ * `ctx show <id>` rendering as a plain string. Same output shape and
+ * source of truth as the tool call. `id` defaults to the current
+ * session so post-compaction injections can attach the main session's
+ * per-task timeline without a follow-up tool call. Returns `undefined`
+ * when the id is not in the inventory.
+ */
+export async function renderCtxShowText(
+	ctx: ExtensionContext,
+	id?: string,
+): Promise<{ text: string; id: string } | undefined> {
+	const inventory = await buildInventory(ctx);
+	const requestedId = id?.trim() || inventory.current.id;
+	const target = findDraft(inventory.root, requestedId);
+	if (!target) return undefined;
+	const root = await hydrateShow(inventory, target);
+	const shownNode = flattenNode(root).find(entry => entry.node.id === target.id)!.node;
+	return { text: renderShow(shownNode, parentChain(root, target.id)), id: target.id };
+}
+
 export default function ctxTool(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "ctx",
 		label: "Context Directory",
 		description:
-			"Use `ctx list` to recall what prior contexts (this session and its subagents) did before opening transcripts; use `ctx show <id>` for one context's handoff + task log.",
+			"Use `ctx list` (page 1 = 20 most recent contexts, add `page=<n>` for more) to recall what prior contexts (this session and its subagents) did before opening transcripts; use `ctx show <id>` for a specific context's handoff and per-task timeline (completed vs open, latest state per task).",
 		parameters: contextParams,
 		approval: "read",
 		loadMode: "essential",
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 			if (signal?.aborted) return { content: [{ type: "text", text: "Cancelled" }] };
-			const inventory = await buildInventory(ctx);
-			const total = inventory.byId.size;
 			if (params.op === "list") {
-				const visibleDrafts = flattenDraft(inventory.root).slice(0, MAX_CONTEXT_ROWS).map(entry => entry.node);
-				const root = await hydrateList(inventory, visibleDrafts);
-				return { content: [{ type: "text", text: renderList(root, total) }], details: { op: params.op, count: total } satisfies CtxToolDetails };
+				const { text, total, page, totalPages } = await renderCtxListText(ctx, { page: params.page });
+				return { content: [{ type: "text", text }], details: { op: params.op, count: total, page, totalPages } satisfies CtxToolDetails };
 			}
 			const requestedId = params.id?.trim();
 			if (!requestedId) throw new Error("ctx show requires an id");
-			const target = findDraft(inventory.root, requestedId);
-			if (!target) {
+			const result = await renderCtxShowText(ctx, requestedId);
+			if (!result) {
+				const inventory = await buildInventory(ctx);
 				const knownIds = [...inventory.byId.keys()].join(", ") || "(none)";
 				throw new Error(`Unknown context \"${requestedId}\". Known ids: ${knownIds}`);
 			}
-			const root = await hydrateShow(inventory, target);
-			const shownNode = flattenNode(root).find(entry => entry.node.id === target.id)!.node;
 			return {
-				content: [{ type: "text", text: renderShow(shownNode, parentChain(root, target.id)) }],
+				content: [{ type: "text", text: result.text }],
 				details: { op: params.op, count: 1 } satisfies CtxToolDetails,
 			};
 		},
