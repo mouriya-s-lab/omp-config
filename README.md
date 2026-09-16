@@ -85,13 +85,38 @@ cp -a agent/agents agent/extensions "$HOME/.omp/agent/"
 
 ### `unified-exec-bun-pty.ts`
 
-修 `pi-unified-exec` 的 `exec_command` 在 `tty: true` 下不可用。两个独立原因：bun 安装插件时不执行 `@homebridge/node-pty-prebuilt-multiarch` 的 lifecycle script，而该包的 npm 产物只带 linux prebuild，本机没有 darwin binding；即使 binding 正确，该包自身通过 tty.ReadStream 读 pty master 的路径在 Bun 下不产生数据，必须直接读 fd。扩展在进程内把该包的 require 缓存指向自带的 direct-fd adapter，插件树和全局 npm 树全程只读。
+这个扩展只解决一个平台兼容问题：在 macOS Apple Silicon（`darwin-arm64`）上，让 `pi-unified-exec` 的 `exec_command` 支持 `tty: true`。`tty: false` 不经过这条兼容路径；其他平台也不会介入。
 
-原生产物不进仓库，也不放 `~/.omp/agent/`（那是本仓库快照的来源），而是落在 `~/.omp/unified-exec-bun-pty-binding/<包版本>-<平台>-<架构>`；路径锚定在 agent 目录的上一级，因此 `PI_CODING_AGENT_DIR` 或 `--profile` 换位置时随之改变。
+**PTY 原生包的下载和放置**
 
-扩展加载时就确定产物状态：缓存里已有可加载产物就直接用；没有则尝试获取一次，优先下载该包发布的预编译件，取不到才用 node-gyp 源码构建（需 Xcode Command Line Tools），`build-origin.txt` 记录来源。之后每次启动既不下载也不构建。并发首次启动在临时目录准备后原子 rename 发布，只保留一份产物。
+这里要下载的不是 `pi-unified-exec` 插件，而是它的可选依赖 `@homebridge/node-pty-prebuilt-multiarch` 的 macOS Apple Silicon 原生预编译包。插件本身必须已经安装，扩展才能找到这个包及其构建文件。
 
-**拿不到可用二进制时扩展完全不介入**：不接管该包的 require 解析，`exec_command` 的行为与没装这个扩展时完全一致（`tty: true` 报插件自己的错误），只在日志里留一行原因和重试路径。仅 darwin-arm64 生效，其他平台同样不介入。失败会写 marker，下次启动不重复尝试；删除 marker 或整个 keyed 目录可重新尝试。`tty: false` 的管道执行任何情况下都不受影响。依赖 `pi-unified-exec` 已安装。
+从 [Homebridge `node-pty-prebuilt-multiarch` releases](https://github.com/homebridge/node-pty-prebuilt-multiarch/releases) 下载与已安装 PTY 包版本匹配的 `darwin-arm64` 归档。归档文件名格式为：
+
+```text
+node-pty-prebuilt-multiarch-v<包版本>-node-v<Node ABI>-darwin-arm64.tar.gz
+```
+
+`<包版本>` 从已安装包的 `package.json` 读取；`<Node ABI>` 从 release 中选择实际存在且能被当前 Bun 加载的资源，不要直接把 Bun 的 ABI 当成 Node ABI。下面的 `node_abi=137` 只是当前 release 的示例值：
+
+```bash
+pty_package_dir="$HOME/.omp/plugins/node_modules/@homebridge/node-pty-prebuilt-multiarch"
+pty_version="$(node -p "require(process.argv[1]).version" "$pty_package_dir/package.json")"
+node_abi=137  # 示例值；按 release 中可用的 darwin-arm64 资源调整
+pty_archive="$HOME/Downloads/node-pty-prebuilt-multiarch-v${pty_version}-node-v${node_abi}-darwin-arm64.tar.gz"
+agent_dir="${PI_CODING_AGENT_DIR:-$HOME/.omp/agent}"
+pty_root="$(dirname "$agent_dir")/unified-exec-bun-pty-binding/${pty_version}-darwin-arm64"
+
+mkdir -p "$HOME/Downloads" "$pty_root"
+curl -fL \
+  "https://github.com/homebridge/node-pty-prebuilt-multiarch/releases/download/v${pty_version}/node-pty-prebuilt-multiarch-v${pty_version}-node-v${node_abi}-darwin-arm64.tar.gz" \
+  -o "$pty_archive"
+tar -xzf "$pty_archive" -C "$pty_root"
+```
+
+解压后必须存在 `${pty_root}/build/Release/pty.node` 和 `${pty_root}/build/Release/spawn-helper`。默认缓存位置是 `~/.omp/unified-exec-bun-pty-binding/<包版本>-darwin-arm64/`；设置 `PI_CODING_AGENT_DIR` 时，缓存位于该 agent 目录的上一级。`.ts` 扩展文件仍按上面的本地扩展迁移规则放在 `~/.omp/agent/extensions/`（或自定义 agent 目录的 `extensions/`），不要把 PTY 归档解到那里。
+
+如果不手动预置缓存，扩展首次启动也会从对应 release 自动下载；下载失败才回退到 `node-gyp` 源码构建。
 
 ### `ctx-tool.ts`
 
