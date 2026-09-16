@@ -1519,7 +1519,12 @@ export default function ctxTool(pi: ExtensionAPI): void {
 		name: "ctx",
 		label: "Context Directory",
 		description:
-			"Use `ctx list` (page 1 = 20 most recent contexts, add `page=<n>` for more) to recall what prior contexts (this session and its subagents) did before opening transcripts; use `ctx show <id>` for a specific context's handoff and per-task timeline (completed vs open, latest state per task).",
+			"Composed, read-only recall view of what prior contexts (this session and its subagents) did — never mutates a session or file. A different axis from `read history://<id>`, which returns the raw transcript verbatim: `ctx` stitches the current session, its subagent registry, transcripts, compaction sidecar summaries, and per-agent task logs into a shallow tree of status, handoff, and task counts.\n" +
+			"- `ctx list` (page 1 = 20 most recent contexts, add `page=<n>` for more): every reachable context (self + subagents + compacted-away stretches) with status, one-line handoff, and todo progress (done / total / blocked). Answer most \"what did we already do?\" questions here before opening any transcript.\n" +
+			"- `ctx show <id>`: one context's full handoff + task log — every `goal`/`todo` op with local timestamp and outcome, plus the compaction sidecar summary. `<id>` is what `ctx list` prints, and what `agent://<id>` and `history://<id>` accept.\n" +
+			"- `read history://<id>` is the fallback, not the default: reach for the raw transcript only when `ctx show` is insufficient — exact wording, the concrete tool arguments issued, an elided message, or raw error text the task log did not capture. Transcripts are large and unindexed; opening one when `ctx` already answers is wasted effort.\n" +
+			"- Scope: this session and its descendants only. Sibling or unrelated sessions never surface here; if you already hold their id, address them directly via `history://<id>` or `agent://<id>`.\n" +
+			"- `todo` and `goal` ops feed the task log `ctx show` reads; update those markers the moment state changes so this recall view stays worth consulting.",
 		parameters: contextParams,
 		approval: "read",
 		loadMode: "essential",
