@@ -18,6 +18,22 @@
 
 命令定义在 `.omp/commands/sync-omp-config.md`，包含同步范围、排除项和校验步骤。
 
+## 用仓库更新本机
+
+反向操作：用本仓库快照更新本机 OMP 配置。在仓库根目录启动 OMP 执行项目级命令：
+
+```
+/update-omp
+```
+
+方向严格单向（仓库 `agent/` → 本机 `~/.omp/agent`，会写本机）。常规只更新 `agents/`、`extensions/*.ts`、`APPEND_SYSTEM.md` 和插件；`config.yml`、`settings.json` 等其余项默认不动，只有 `init` 参数才逐项确认后迁移。扩展需要初始化或写配置文件时（如 `doc-polish.json`）若本机已存在就不动，否则询问用户。`check` 参数只报告差异、不写本机：
+
+```
+/update-omp check
+```
+
+插件部分先跑根目录 `./plugin-audit.sh`：它以基准提交 `5974c4fa` 起扫 `install-plugins.sh` 的历史插件名，归一后直接与 `omp plugin list` 对比，给出待安装、卸载候选（历史存在过、现已从脚本移除、本机仍装）、保留和已同步四类结论。缺的插件跑 `./install-plugins.sh` 补齐；卸载候选先询问用户。命令定义在 `.omp/commands/update-omp.md`。
+
 ## 同步两台不同机器上的omp供应商密钥，避免换一台机器就要登录
 
 在仓库根目录启动 OMP，执行仓库级命令（定义见 `.omp/commands/migrate-omp-keys.md`），把本机 active 数据库（`PI_CODING_AGENT_DIR` 非空时取其下 `agent.db`，否则为 `~/.omp/agent/agent.db`）里的 `auth_credentials` 记录经 SSH 传到指定远端 OMP 主机：

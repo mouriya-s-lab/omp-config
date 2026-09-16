@@ -1,17 +1,9 @@
 extensions:
   - ~/.claude
 providers:
-symbolPreset: nerd
-theme:
-  dark: titanium
-  light: light-ocean
 setupVersion: 2
-colorBlindMode: false
 dev:
   autoqaConsent: denied
-composer:
-  shape: band
-hideThinkingBlock: false
 github:
   enabled: true
 astGrep:
@@ -43,19 +35,6 @@ fetch:
   enabled: false
 browser:
   enabled: false
-statusLine:
-  contextLine: annotated
-  sessionAccent: true
-  transparent: false
-terminal:
-  showProgress: false
-tui:
-  textSizing: true
-  imeSafeCursor: true
-display:
-  showTokenUsage: true
-  showTurnTime: true
-  smoothStreaming: true
 cycleOrder:
   - slow
 compaction:
