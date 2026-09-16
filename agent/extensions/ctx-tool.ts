@@ -792,18 +792,6 @@ function compactionCountsSuffix(entry: CompactionEntry): string {
 	return counts.length > 0 ? ` (${counts.join(", ")})` : "";
 }
 
-function compactionSummary(entry: CompactionEntry): SummaryCell {
-	const shortSummary = textField(entry.shortSummary);
-	const summary = textField(entry.summary);
-	const preferred = shortSummary ?? summary;
-	if (!preferred) return { kind: "none" };
-	if (isRemoteCompactionPlaceholder(shortSummary) || isRemoteCompactionPlaceholder(summary)) {
-		const suffix = compactionCountsSuffix(entry);
-		return { kind: "text", text: truncate(`${preferred}${suffix}`) };
-	}
-	return { kind: "text", text: truncate(preferred) };
-}
-
 function compactionHandoff(entry: CompactionEntry): string {
 	const summary = textField(entry.summary) ?? textField(entry.shortSummary) ?? "(none)";
 	if (isRemoteCompactionPlaceholder(entry.summary) || isRemoteCompactionPlaceholder(entry.shortSummary)) {
@@ -1299,12 +1287,27 @@ function sidecarNeeds(
 	return { files: [...files], extensions: [...extensions] };
 }
 
+function handoffSummaryCell(handoff: string): SummaryCell {
+	if (handoff === "(none)" || handoff.trim().length === 0) return { kind: "none" };
+	for (const raw of handoff.split(/\r?\n/)) {
+		const line = raw.trim();
+		if (line.length === 0 || line.startsWith("#") || isRemoteCompactionPlaceholder(line)) continue;
+		return { kind: "text", text: truncate(line) };
+	}
+	return { kind: "none" };
+}
+
+// The current session's list summary: prefer a snippet of the actual handoff
+// (goal/progress) over the compaction placeholder shortSummary, falling back to
+// the first user prompt. `ctx show` still renders the full handoff.
 function currentNodeData(inventory: Inventory): NodeData {
-	const summary: SummaryCell = inventory.current.latestCompaction
-		? compactionSummary(inventory.current.latestCompaction)
-		: inventory.current.firstUserPrompt
-			? { kind: "text", text: truncate(inventory.current.firstUserPrompt) }
-			: { kind: "none" };
+	const fromHandoff = handoffSummaryCell(inventory.currentCompactionHandoff);
+	const summary: SummaryCell =
+		fromHandoff.kind === "text"
+			? fromHandoff
+			: inventory.current.firstUserPrompt
+				? { kind: "text", text: truncate(inventory.current.firstUserPrompt) }
+				: { kind: "none" };
 	return { summary, handoff: "(none)" };
 }
 
@@ -1376,7 +1379,11 @@ function relativeLast(timestampMs: number | undefined): string | undefined {
 
 function renderNodeLine(node: ContextNode, depth: number, collapsedCount?: number): string {
 	const fields = [`**${node.id}**`, `${node.flavor ?? node.kind}/${node.status}`];
-	if (node.tasks) fields.push(`${node.tasks.done}/${node.tasks.total}`);
+	if (node.tasks) {
+		fields.push(`${node.tasks.done}/${node.tasks.total}`);
+		const blocked = node.timeline?.open.filter(entry => entry.blocked !== undefined).length ?? 0;
+		if (blocked > 0) fields.push(`${blocked} blocked`);
+	}
 	const last = relativeLast(node.lastActivityMs);
 	if (last) fields.push(last);
 	if (node.summary.kind === "text") fields.push(node.summary.text);
