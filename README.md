@@ -158,10 +158,6 @@ compact 完成后调用 `ctx-tool.ts` 导出的 `renderCtxListText` 与 `renderC
 
 包装 `fetch`，从 `xai-oauth` 的 Responses SSE 中捕获 `usage.cost_in_usd_ticks`，并在 `message_end` 持久化前补回 `usage.cost.total`。只处理 `xai-oauth` assistant 消息，重复加载不会重复包装 `fetch`。
 
-### `legacy-plugin-theme.ts`
-
-在会话启动、用户输入和 agent 启动前，将宿主当前 UI theme 同步到 legacy plugin 使用的 theme module graph，避免 Markdown 等输出沿用另一套主题。
-
 ### `v2-compaction-timeout.ts`
 
 只把 compaction 使用的 `AbortSignal.timeout(180000)` 延长到 `600000`，其他超时保持原值。安装具有进程级幂等保护，并记录扩展安装与延长事件。
