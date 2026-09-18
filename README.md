@@ -190,6 +190,25 @@ compact 完成后调用 `ctx-tool.ts` 导出的 `renderCtxListText` 与 `renderC
 
 返回语义：模型调用 `polish_doc` 时，评审文件路径与「参考方向、非权威结论」的使用说明作为工具结果返回，由调用模型自行判断如何采纳。人用 `/polish-doc` 调用时不直接展示给人，而是把同样的结果作为新输入交给当前会话的主 agent（`pi.sendUserMessage`），由主 agent 阅读评审并决定如何使用。
 
+### `watchdog-agent.ts`
+
+由 `WATCHDOG-*.md` 文件驱动的「按目标」reviewer（watchdog），补足原生 advisor 的一个空档：原生 advisor 能按 agent 开关（`task.agentAdvisor` / agent frontmatter `advisor:`），但它发现到的 `WATCHDOG.md`/`WATCHDOG.yml` 会推给所有被顾问的会话，无法把审阅内容只投给某个目标。ExtensionAPI 没有介入原生 advisor 的钩子，所以本扩展是自带的独立 reviewer（用 `createAgentSession`，与 `lang-nag`/`doc-polish` 同型），不是对原生子系统的扩展。
+
+文件名为 `WATCHDOG-<标签>.md`，头部用 Claude `rule.md` 式 frontmatter：
+
+- `target`（必填）：`main` | 子 agent 名（如 `task:mid`、`discuss:divergent`） | `*` | `subagents` | 逗号分隔列表。决定这份 watchdog 监视谁，正文只投给匹配的目标。
+- `model`（可选）：reviewer 模型，支持 `:effort` 后缀；缺省用 `advisor` 角色（`@advisor`），再退到当前会话模型。
+- `tools`（可选）：reviewer 可用的内置工具，默认只读 `read`/`grep`/`glob`；非白名单名（read/grep/glob/ast_grep/web_search/edit/write/bash/eval）被丢弃。
+- `name` / `enabled`（默认 `true`） / `delivery`（`aside`|`steer`|`nextTurn`|`followUp`，默认 `aside`） / `maxPerContext`（默认 `6`）。
+
+frontmatter 之后的正文是交给 reviewer 的审阅重点。发现路径：用户级 `<agent dir>/WATCHDOG-*.md`（默认 `~/.omp/agent`，受 `PI_CODING_AGENT_DIR` 影响），仓库级从 cwd 向 git root 逐层取 `<dir>/WATCHDOG-*.md` 与 `<dir>/.omp/WATCHDOG-*.md`。会话身份：主会话文件名匹配 `<时间戳>_<uuid>.jsonl`，子 agent 从会话文件的 `session_init.agent` 读出 agent 名。
+
+运行：在每个结算轮次（`agent_end` 且非 `willContinue`）、且会话身份匹配某个 watchdog 时，渲染有界的最近 transcript（排除自身注入的 `<watchdog>` 消息），对每个匹配的 watchdog 用其模型+工具各跑一遍 reviewer；判定不通过时以 `<watchdog name=… severity=…>` 通过 `sendUserMessage` 注入回该会话。按归一化文本去重，并按 context 上限封顶以防循环。任何失败路径（无匹配、模型解析失败、reviewer 出错或超时、文件损坏）都降级为不提示，绝不阻塞或破坏主轮次。
+
+隔离与无递归：扩展会随 restricted children 被 rebind 进 subagent 会话，因此能作用于子 agent；reviewer 自身的 `createAgentSession` 用 `disableExtensionDiscovery: true` + 内存态 `SessionManager`，不会递归加载本扩展。
+
+仓库之外的运行时行为：需在 `~/.omp/agent/` 或仓库 `.omp/` 放置 `WATCHDOG-*.md` 才生效，无匹配文件时完全静默；reviewer 按其模型独立消耗额度。子 agent 上的注入是尽力而为——只有在该轮于执行器收走切片结果前重新打开时才落地；主会话上，空闲时注入会开启新一轮（标准 advisor 行为）。
+
 ## 执行安装
 
 插件不随仓库复制。执行根目录脚本：

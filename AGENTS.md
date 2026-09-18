@@ -55,7 +55,7 @@ flowchart LR
 | Path | Purpose |
 | --- | --- |
 | `agent/` | Managed harness config. Only listed items are portable; the whole dir is **not**. |
-| `agent/extensions/` | Local TypeScript extensions (the code core). 12 `.ts` + `doc-polish.json` sidecar. |
+| `agent/extensions/` | Local TypeScript extensions (the code core). 14 `.ts` + `doc-polish.json`/`lang-nag.json` sidecars. |
 | `agent/agents/` | Custom subagent definitions (`*.md`) + `README.txt` authoring pitfalls. |
 | `.omp/commands/` | Project-level slash-command definitions run from repo root. |
 | repo root | `install-plugins.sh`, `plugin-audit.sh`, `README.md` (authoritative, in Chinese). |
