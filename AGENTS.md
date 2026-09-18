@@ -55,7 +55,7 @@ flowchart LR
 | Path | Purpose |
 | --- | --- |
 | `agent/` | Managed harness config. Only listed items are portable; the whole dir is **not**. |
-| `agent/extensions/` | Local TypeScript extensions (the code core). 14 `.ts` + `doc-polish.json`/`lang-nag.json` sidecars. |
+| `agent/extensions/` | Local TypeScript extensions (the code core). 15 `.ts` (incl. `bro.ts`, the built-in-AI rewrite of the former `pi-bro` plugin, and `watchdog-agent.ts`) + `doc-polish.json`/`lang-nag.json` sidecars. |
 | `agent/agents/` | Custom subagent definitions (`*.md`) + `README.txt` authoring pitfalls. |
 | `.omp/commands/` | Project-level slash-command definitions run from repo root. |
 | repo root | `install-plugins.sh`, `plugin-audit.sh`, `README.md` (authoritative, in Chinese). |
@@ -171,10 +171,10 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
   (`splitModel`, `polishModel`, `concurrency`; `checkModel` optional, omitted
   here). A cwd-local `doc-polish.json` wins over this one. **Distinct** from `ctx`
   `.md`/`.json` sidecar artifacts.
-- `install-plugins.sh` — declared plugin list: `pi-bro`,
-  `pi-commandcode-provider`, `pi-package-search`, `pi-unified-exec`,
-  `pi-pretty-codeblocks`, `pi-schedule`, and the GitHub URL
-  `Mouriya-Emma/omp-thinking-translator` (unpinned; `omp install` resolves versions).
+- `install-plugins.sh` — declared plugin list: `pi-commandcode-provider`,
+  `pi-package-search`, `pi-unified-exec`, `pi-pretty-codeblocks`, `pi-schedule`, and
+  the GitHub URL `Mouriya-Emma/omp-thinking-translator` (unpinned; `omp install`
+  resolves versions). The former `pi-bro` plugin is now the local `agent/extensions/bro.ts`.
 - `plugin-audit.sh` — drift report; base commit `5974c4fa`; requires `omp` on PATH
   and a git worktree.
 - `.omp/commands/{update-omp,sync-omp-config,migrate-omp-keys}.md` — the command
