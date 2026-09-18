@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { setThemeInstance, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { setThemeInstance, theme } from "@oh-my-pi/pi-tui/theme";
 
 // The npm CLI is bundled, while legacy plugins import a separate source module
 // graph. Give that graph the active host theme before plugins render Markdown.
