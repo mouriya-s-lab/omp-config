@@ -100,10 +100,28 @@ type ShellProgram =
     | 'ruby';
 type NonEmptyReadonlyArray<T> = readonly [T, ...T[]];
 
+/** Library entry points the eval tool's `code` uses to reimplement `read`/`glob`. */
+type EvalApi =
+    | 'open'
+    | 'Path.read_text'
+    | 'Path.read_bytes'
+    | 'readlines'
+    | 'readFileSync'
+    | 'fs.readFile'
+    | 'Bun.file'
+    | 'os.listdir'
+    | 'os.scandir'
+    | 'os.walk'
+    | 'glob.glob'
+    | 'Path.glob'
+    | 'readdirSync'
+    | 'fs.readdir'
+    | 'Bun.Glob';
+
 /** One shell command matched by one or more policy categories. */
 export type ShellViolation = {
     readonly categories: NonEmptyReadonlyArray<ViolationCategory>;
-    readonly program: ShellProgram;
+    readonly program: ShellProgram | EvalApi;
     readonly target: string;
 };
 
@@ -869,6 +887,67 @@ export function detectWriteShellViolations(path: string, content: unknown): Shel
     }
 }
 
+type EvalLanguage = 'py' | 'js';
+/** One library call the eval tool's `code` uses where a built-in tool exists. */
+type EvalPattern = {
+    readonly category: 'read' | 'list';
+    readonly program: EvalApi;
+    readonly test: RegExp;
+};
+
+/**
+ * The eval tool's `code` is Python or JavaScript, not a shell line, so it needs
+ * its own matchers. Only file reads (the `read` tool) and path/directory listing
+ * (the `glob` tool) are flagged; writes, subprocesses, and in-memory work are
+ * left alone. Patterns run in order and the first match per category names it.
+ */
+const EVAL_PATTERNS: Record<EvalLanguage, readonly EvalPattern[]> = {
+    py: [
+        { category: 'read', program: 'Path.read_text', test: /\.read_text\s*\(/ },
+        { category: 'read', program: 'Path.read_bytes', test: /\.read_bytes\s*\(/ },
+        { category: 'read', program: 'open', test: /\bopen\s*\((?:[^()]|\([^()]*\))*\)\s*\.\s*read/ },
+        { category: 'read', program: 'open', test: /\bopen\s*\([^)]*,\s*['"]r[bt+]*['"]\s*\)/ },
+        { category: 'read', program: 'open', test: /\bwith\s+open\s*\((?![^)]*['"][wax][bt+]*['"])[^)]*\)\s*as\b/ },
+        { category: 'read', program: 'open', test: /\bfor\b[^\n]*\bin\s+open\s*\(/ },
+        { category: 'read', program: 'readlines', test: /\.readlines\s*\(/ },
+        { category: 'list', program: 'glob.glob', test: /\bglob\.i?glob\s*\(/ },
+        { category: 'list', program: 'os.walk', test: /\bos\.walk\s*\(/ },
+        { category: 'list', program: 'os.listdir', test: /\bos\.listdir\s*\(/ },
+        { category: 'list', program: 'os.scandir', test: /\bos\.scandir\s*\(/ },
+        { category: 'list', program: 'Path.glob', test: /\.\s*r?glob\s*\(/ },
+    ],
+    js: [
+        { category: 'read', program: 'readFileSync', test: /\breadFileSync\s*\(/ },
+        { category: 'read', program: 'fs.readFile', test: /\.\s*readFile\s*\(/ },
+        { category: 'read', program: 'Bun.file', test: /\bBun\.file\s*\((?:[^()]|\([^()]*\))*\)\s*\.\s*(?:text|json|bytes|arrayBuffer|stream|formData)\s*\(/ },
+        { category: 'list', program: 'readdirSync', test: /\breaddirSync\s*\(/ },
+        { category: 'list', program: 'fs.readdir', test: /\.\s*readdir\s*\(/ },
+        { category: 'list', program: 'Bun.Glob', test: /\bBun\.Glob\b|\bnew\s+Glob\s*\(/ },
+    ],
+};
+
+const isEvalLanguage = (language: string): language is EvalLanguage =>
+    language === 'py' || language === 'js';
+
+/**
+ * Flags eval-tool code that reimplements `read` (file bytes) or `glob`
+ * (directory/path listing), at most one violation per category. Write,
+ * subprocess, and pure in-memory work are intentionally ignored.
+ */
+export function detectEvalViolations(language: string, code: string): ShellViolation[] {
+    if (!isEvalLanguage(language)) return [];
+    const seen: Record<'read' | 'list', boolean> = { read: false, list: false };
+    const violations: ShellViolation[] = [];
+    for (const { category, program, test } of EVAL_PATTERNS[language]) {
+        if (seen[category]) continue;
+        const match = test.exec(code);
+        if (match === null) continue;
+        seen[category] = true;
+        violations.push({ categories: [category], program, target: match[0].trim().slice(0, 60) });
+    }
+    return violations;
+}
+
 const WATCHING: NagState = { kind: 'watching', hits: 0, nagsSent: 0 };
 
 function parseState(data: unknown): NagState | null {
@@ -958,6 +1037,11 @@ export default function toolPolicyNag(pi: ExtensionAPI): void {
             const command = stringField(event.input, 'cmd');
             if (command === null) return;
             violations = detectShellViolations(command);
+        } else if (event.toolName === 'eval') {
+            const language = stringField(event.input, 'language');
+            const code = stringField(event.input, 'code');
+            if (language === null || code === null) return;
+            violations = detectEvalViolations(language, code);
         } else {
             return;
         }
