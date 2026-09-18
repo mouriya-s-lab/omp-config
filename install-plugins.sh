@@ -7,7 +7,6 @@ command -v omp >/dev/null 2>&1 || {
 }
 
 plugins=(
-  'pi-bro'
   'pi-commandcode-provider'
   'pi-package-search'
   'pi-unified-exec'
