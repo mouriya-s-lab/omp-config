@@ -36,6 +36,15 @@ description: 把本机 ~/.omp 配置同步进本仓库快照（单向）
 - `modelRoles`
 - `defaultThinkingLevel`
 - `skills`
+- `symbolPreset`
+- `theme`
+- `colorBlindMode`
+- `hideThinkingBlock`
+- `statusLine`
+- `terminal`
+- `tui`
+- `display`
+- `worktree`
 
 
 ## 步骤

@@ -13,6 +13,7 @@ plugins=(
   'pi-pretty-codeblocks'
   'pi-schedule'
   'https://github.com/Mouriya-Emma/omp-thinking-translator'
+  'https://github.com/mouriya-s-lab/omp-codex-image-gen'
 )
 
 for plugin in "${plugins[@]}"; do
