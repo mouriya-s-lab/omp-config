@@ -334,6 +334,14 @@ export default function langNag(pi: ExtensionAPI): void {
 
 	pi.on("input", async (event, ctx) => {
 		if (!mainSession) return;
+		// Slash-command invocations are harness UI, not natural language — never nag.
+		// Discard any armed verdict: this turn is consumed by the command, and a
+		// stale instruction must not leak into the next genuine user message.
+		if (event.text.startsWith("/")) {
+			pending = null;
+			replyHandled = false;
+			return;
+		}
 		// Only prepend to genuine user turns, never to synthetic injections
 		// (steers/asides from this or other extensions).
 		if (event.source === "extension") return;
