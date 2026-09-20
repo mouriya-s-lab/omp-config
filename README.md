@@ -10,7 +10,7 @@
 /sync-omp-config
 ```
 
-方向严格单向（`~/.omp/agent` → 仓库 `agent/`），只读本机文件。加 `check` 参数只报告差异、不写入也不提交：
+方向严格单向（`~/.omp/agent` → 仓库 `agent/`），只读本机文件。`thinking-translator.json` 按本机 `~/.omp/agent/thinking-translator.json` → 仓库 `agent/thinking-translator.json` 比对后覆盖，写入前后用 `bun -e` 以 `JSON.parse` 确认可解析。加 `check` 参数只报告差异、不写入也不提交：
 
 ```
 /sync-omp-config check
@@ -26,7 +26,7 @@
 /update-omp
 ```
 
-方向严格单向（仓库 `agent/` → 本机 `~/.omp/agent`，会写本机）。常规只更新 `agents/`、`extensions/*.ts`、`APPEND_SYSTEM.md` 和插件；`config.yml`、`settings.json` 等其余项默认不动，只有 `init` 参数才逐项确认后迁移。扩展需要初始化或写配置文件时（如 `doc-polish.json`）若本机已存在就不动，否则询问用户。`check` 参数只报告差异、不写本机：
+方向严格单向（仓库 `agent/` → 本机 `~/.omp/agent`，会写本机）。常规只更新 `agents/`、`extensions/*.ts`、`APPEND_SYSTEM.md`、`thinking-translator.json` 和插件；`config.yml`、`settings.json` 等其余项默认不动，只有 `init` 参数才逐项确认后迁移。`thinking-translator.json` 是 agent 根目录的常规托管文件（供 `omp-thinking-translator` 读取），有差异直接覆盖，覆盖前后用 `bun -e` 以 `JSON.parse` 确认可解析；这与 `doc-polish.json`（本机相关、本机已存在就不动，否则询问用户）、`commandcode-models.json`（本机生成、不迁移）不同。`check` 参数只报告差异、不写本机：
 
 ```
 /update-omp check
@@ -74,6 +74,7 @@ OMP 把 subagent 分成三类：`task:*` 负责执行，`discuss:*` 只读讨论
 - `agent/config.yml`：OMP 配置和 UI 行为
 - `agent/settings.json`：扩展加载路径
 - `agent/APPEND_SYSTEM.md`：追加系统提示词
+- `agent/thinking-translator.json`：思考过程翻译配置（`omp-thinking-translator` 读 agent 根目录）
 - `agent/agents/`：agent 定义
 - `agent/extensions/`：本地扩展代码
 
@@ -88,6 +89,7 @@ mkdir -p "$HOME/.omp/agent"
 cp agent/config.yml "$HOME/.omp/agent/config.yml"
 cp agent/settings.json "$HOME/.omp/agent/settings.json"
 cp agent/APPEND_SYSTEM.md "$HOME/.omp/agent/APPEND_SYSTEM.md"
+cp agent/thinking-translator.json "$HOME/.omp/agent/thinking-translator.json"
 cp -a agent/agents agent/extensions "$HOME/.omp/agent/"
 ```
 

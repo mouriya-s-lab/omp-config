@@ -6,6 +6,7 @@
 (`omp`) coding-harness configuration — **not** a full `~/.omp` backup
 (`README.md:1-3`). It holds only reviewable inputs: harness config, the appended
 system prompt, custom subagent definitions, local TypeScript extensions, the
+agent-root `thinking-translator.json` for `omp-thinking-translator`, the
 plugin install list, and the maintenance commands that move state between this
 repo and a machine's live `~/.omp/agent`. Runtime state (databases, sessions,
 caches, credentials) is deliberately excluded.
@@ -17,17 +18,18 @@ The repo is consumed by `omp` in two directions:
 ## Architecture & Data Flow
 
 ```mermaid
-flowchart LR
   subgraph repo["omp-config (this repo)"]
     A["agent/config.yml"]
     S["agent/settings.json"]
     P["agent/APPEND_SYSTEM.md"]
+    T["agent/thinking-translator.json"]
     G["agent/agents/*.md"]
     E["agent/extensions/*.ts"]
     I["install-plugins.sh"]
   end
   subgraph machine["~/.omp/agent (live)"]
     LA["config.yml / settings.json"]
+    LT["thinking-translator.json"]
     LG["agents/"]
     LE["extensions/"]
     PL["~/.omp/plugins/"]
@@ -47,16 +49,22 @@ flowchart LR
   or subscribes to lifecycle events on the `ExtensionAPI` (`pi`).
 - **Two one-way syncs, never one "sync".** `/sync-omp-config` never writes the
   machine; `/update-omp` writes the machine (`.omp/commands/*.md`).
-- **Plugins are runtime state**, installed via `omp install` into
-  `~/.omp/plugins/` and never copied into this repo (`README.md:193-208`).
+- **Agent-root `thinking-translator.json` is managed in both directions** as a
+  regular (non-`init`) item: `/sync-omp-config` diffs the live file into
+  `agent/thinking-translator.json` (machine → repo); `/update-omp` diffs the
+  snapshot back onto the machine (repo → machine, honoring
+  `$PI_CODING_AGENT_DIR`). Both sides validate it with `bun -e` + `JSON.parse`.
+  It is **not** like `doc-polish.json` (machine-local, prompt-overridable) or
+  `commandcode-models.json` (machine-generated, never migrated).
 
 ## Key Directories
 
 | Path | Purpose |
 | --- | --- |
 | `agent/` | Managed harness config. Only listed items are portable; the whole dir is **not**. |
-| `agent/extensions/` | Local TypeScript extensions (the code core). 15 `.ts` (incl. `bro.ts`, the built-in-AI rewrite of the former `pi-bro` plugin, and `watchdog-agent.ts`) + `doc-polish.json`/`lang-nag.json` sidecars. |
+| `agent/extensions/` | Local TypeScript extensions (the code core). 15 `.ts` (incl. `bro.ts`, the built-in-AI rewrite of the former `pi-bro` plugin, and `watchdog-agent.ts`) + `doc-polish.json`/`lang-nag.json` sidecars (`doc-polish.json` is machine-local/prompt-overridable — see Important Files). |
 | `agent/agents/` | Custom subagent definitions (`*.md`) + `README.txt` authoring pitfalls. |
+| `agent/thinking-translator.json` | Agent-root translator config for `omp-thinking-translator`. Portable regular item: `/sync-omp-config` carries machine → repo, `/update-omp` carries repo → machine. |
 | `.omp/commands/` | Project-level slash-command definitions run from repo root. |
 | repo root | `install-plugins.sh`, `plugin-audit.sh`, `README.md` (authoritative, in Chinese). |
 
@@ -167,25 +175,32 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
 - `agent/settings.json` — minimal legacy extension path: `{"extensions": ["~/.claude"]}`.
 - `agent/APPEND_SYSTEM.md` — global system-prompt appendix (orchestration stance,
   agent tiers, tool policy).
+- `agent/thinking-translator.json` — agent-root config read by
+  `omp-thinking-translator` at the live agent dir. Managed regular item in both
+  directions (diff-then-copy; validate with `bun -e` + `JSON.parse`). Unlike
+  `agent/extensions/doc-polish.json` below, it is portable, not machine-local.
 - `agent/extensions/doc-polish.json` — active config for `doc-polish.ts`
   (`splitModel`, `polishModel`, `concurrency`; `checkModel` optional, omitted
-  here). A cwd-local `doc-polish.json` wins over this one. **Distinct** from `ctx`
+  here). Machine-local and prompt-overridable: `/update-omp` never touches an
+  existing live copy and asks before creating a missing one. A cwd-local
+  `doc-polish.json` wins over this one. **Distinct** from `ctx`
   `.md`/`.json` sidecar artifacts.
 - `install-plugins.sh` — declared plugin list: `pi-commandcode-provider`,
   `pi-package-search`, `pi-unified-exec`, `pi-pretty-codeblocks`, `pi-schedule`, and
   the GitHub URL `Mouriya-Emma/omp-thinking-translator` (unpinned; `omp install`
-  resolves versions). The former `pi-bro` plugin is now the local `agent/extensions/bro.ts`.
+  resolves versions; its runtime config is the portable agent-root `thinking-translator.json` above). The former `pi-bro` plugin is now the local `agent/extensions/bro.ts`.
 - `plugin-audit.sh` — drift report; base commit `5974c4fa`; requires `omp` on PATH
   and a git worktree.
 - `.omp/commands/{update-omp,sync-omp-config,migrate-omp-keys}.md` — the command
   contracts; read these for exact copy/exclusion/validation rules.
 
-Direct-migration copy set (never copy the whole `agent/`; `README.md:84-90`):
+Direct-migration copy set (never copy the whole `agent/`; `README.md:87-94`):
 
 ```bash
-cp agent/config.yml agent/settings.json agent/APPEND_SYSTEM.md "$HOME/.omp/agent/"
+cp agent/config.yml agent/settings.json agent/APPEND_SYSTEM.md agent/thinking-translator.json "$HOME/.omp/agent/"
 cp -a agent/agents agent/extensions "$HOME/.omp/agent/"
 ```
+
 
 ## Runtime/Tooling Preferences
 
@@ -199,7 +214,7 @@ cp -a agent/agents agent/extensions "$HOME/.omp/agent/"
 - **Active agent dir:** `$PI_CODING_AGENT_DIR` if set and non-empty, else
   `~/.omp/agent`. The PTY native cache sits one level above the agent dir.
 - **Restart required:** `APPEND_SYSTEM.md`, extensions, and plugins take effect on
-  the next `omp` start (`.omp/commands/update-omp.md:52-59`); agent `*.md` edits
+  the next `omp` start (`.omp/commands/update-omp.md:61-67`); agent `*.md` edits
   apply on next spawn without restart.
 - **Never commit** (per `.gitignore`): `agent/*.db*`, `*.lock`, `config.yml.lock`,
   `models.yml*`, `commandcode-models.json`, `sessions/`, `terminal-sessions/`,
@@ -217,7 +232,7 @@ cp -a agent/agents agent/extensions "$HOME/.omp/agent/"
 - **`plugin-audit.sh` validates the plugin *list*, not extension code** — it
   cannot prove anything about a `.ts` edit.
 - **How to validate a change here:**
-  1. `bun -e` parse check for any changed YAML/JSON (`config.yml`, `*.json`).
+  1. `bun -e` parse check for any changed YAML/JSON (`config.yml`, `*.json`) — including `agent/thinking-translator.json` via `JSON.parse` on both sync and update paths.
   2. For an extension change, the only real proof is runtime: apply via
      `/update-omp` (or the `cp` set), **restart `omp`**, and exercise the actual
      tool/command/hook (e.g. run `ctx list`, `/polish-doc <file>`, trigger the

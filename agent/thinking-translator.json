@@ -1,0 +1,9 @@
+{
+  "enabled": true,
+  "targetLanguage": "Simplified Chinese",
+  "translatorModel": {
+    "provider": "futureppo",
+    "id": "ministral-14b-latest"
+  },
+  "trace": false
+}

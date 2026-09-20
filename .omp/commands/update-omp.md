@@ -12,19 +12,26 @@ description: 用本仓库快照更新本机 OMP 配置（repo → 本机）
 
 ## 更新范围
 
-常规只更新下面四项。其余（`config.yml`、`settings.json`、`models*`、数据库、WAL、会话、缓存、日志等）默认**不动**，只有初始化（`init` 参数）时才迁移：
+常规只更新下面五项。其余（`config.yml`、`settings.json`、`models*`、数据库、WAL、会话、缓存、日志等）默认**不动**，只有初始化（`init` 参数）时才迁移：
 
 | 仓库 | 本机 |
 | --- | --- |
 | `agent/agents/` | `~/.omp/agent/agents/` |
 | `agent/extensions/*.ts` | `~/.omp/agent/extensions/` |
 | `agent/APPEND_SYSTEM.md` | `~/.omp/agent/APPEND_SYSTEM.md` |
+| `agent/thinking-translator.json` | 本机 agent 目录 `thinking-translator.json`（`PI_CODING_AGENT_DIR` 非空时以其为准，否则 `~/.omp/agent/thinking-translator.json`） |
 | `install-plugins.sh` 的插件列表 | 本机已装插件 |
 
 ## APPEND_SYSTEM 与 agents
 
 - `agent/APPEND_SYSTEM.md` 直接覆盖本机同名文件。
 - `agent/agents/` 覆盖到本机，先 `diff -rq` 确认范围再复制。
+
+## thinking-translator.json
+
+- `agent/thinking-translator.json` 是常规托管的根文件（非初始化项）：先比对仓库与本机差异，有差异再覆盖到本机 agent 目录。
+- 与 `doc-polish.json`（本机相关、缺失需询问才建）、`commandcode-models.json`（本机生成、不迁移）不同，本文件直接随常规更新迁移。
+- 覆盖前后都用 `bun -e` 以 `JSON.parse` 确认可解析。
 
 ## 扩展（extensions）
 
@@ -54,7 +61,7 @@ description: 用本仓库快照更新本机 OMP 配置（repo → 本机）
 ## 校验
 
 1. 复制的普通文件与仓库源 `cmp` 一致。
-2. 动过 `config.yml` / `settings.json` 时用 `bun -e` 确认可解析（`Bun.YAML.parse` / `JSON.parse`）。
+2. 动过 `config.yml` / `settings.json` 时用 `bun -e` 确认可解析（`Bun.YAML.parse` / `JSON.parse`）；复制/动过 `thinking-translator.json` 时用 `bun -e` 以 `JSON.parse` 确认可解析。
 3. 不打印凭据；不把明文凭据写进本机。
 4. 报告实际改了哪些文件、装 / 卸了哪些插件、哪些初始化或配置项因等用户确认被跳过。
 5. 生效需**重启 OMP**：APPEND_SYSTEM、扩展、插件在下次启动加载。
@@ -63,6 +70,6 @@ description: 用本仓库快照更新本机 OMP 配置（repo → 本机）
 
 `$ARGUMENTS`
 
-- 为空：常规更新（agents / extensions / APPEND_SYSTEM / plugins）。
+- 为空：常规更新（agents / extensions / APPEND_SYSTEM / thinking-translator.json / plugins）。
 - `check`：只逐项比对并报告差异（含跑 `plugin-audit.sh` 展示插件对比），不复制、不装卸、不写本机。
 - `init`：在常规更新基础上，额外迁移 `config.yml` / `settings.json` 等初始项，逐项先确认。
