@@ -4,6 +4,8 @@ description: 把本机 OMP provider 凭据经 SSH 迁到远端 OMP 主机
 
 把本机当前 OMP 的 provider 凭据搬到一台远端 OMP 主机。只做直传，不轮换、不刷新。
 
+不要使用 subagent，直接执行。
+
 ## 目标
 
 `$ARGUMENTS` 为空时，用 OMP ask 工具向操作者要一个 SSH 目标（如 `user@host` 或 SSH alias），仍拿不到或目标无效时停止，不继续。

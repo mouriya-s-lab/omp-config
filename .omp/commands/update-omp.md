@@ -4,6 +4,8 @@ description: 用本仓库快照更新本机 OMP 配置（repo → 本机）
 
 用本仓库快照更新本机 OMP 配置。方向与 `/sync-omp-config` 相反。
 
+不要使用 subagent，直接执行。
+
 ## 方向
 
 严格单向：仓库 `agent/` → 本机 `~/.omp/agent`（**会写本机**）。与 `/sync-omp-config`（本机→仓库、只读本机）互为反向。本机 agent 目录取值：`PI_CODING_AGENT_DIR` 非空时取其目录，否则 `~/.omp/agent`。
