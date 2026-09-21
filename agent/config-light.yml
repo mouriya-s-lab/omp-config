@@ -1,11 +1,8 @@
 disabledExtensions:
-  - extension-module:bro
-  - extension-module:commandcode-usage
   - extension-module:ctx-post-compact-hint
   - extension-module:ctx-tasklog
   - extension-module:ctx-tool
   - extension-module:doc-polish
   - extension-module:lang-nag
-  - extension-module:repo-rules
   - extension-module:tool-policy-nag
   - extension-module:watchdog-agent
