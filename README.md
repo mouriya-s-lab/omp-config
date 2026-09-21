@@ -10,7 +10,7 @@
 /sync-omp-config
 ```
 
-方向严格单向（本机 active agent 目录 → 仓库 `agent/`，目录取非空 `PI_CODING_AGENT_DIR`，否则为 `~/.omp/agent`），只读本机文件。同步范围包含普通配置、扩展以及轻量模式的 `config-light.yml`、`APPEND_SYSTEM_LIGHT.md`、`omp-light.ts`；已安装的 `omp-light` / `omp-light.cmd` 不属于同步内容。加 `check` 参数只报告差异、不写入也不提交：
+方向严格单向（本机 active agent 目录 → 仓库 `agent/`，将 `PI_CODING_AGENT_DIR` 去除首尾空白后非空则取其值，否则为 `~/.omp/agent`），只读本机文件。同步范围包含普通配置、扩展、`thinking-translator.json` 以及轻量模式的 `config-light.yml`、`APPEND_SYSTEM_LIGHT.md`、`omp-light.ts`；`thinking-translator.json` 按本机 agent 根目录 → 仓库对应文件比对后覆盖，写入前后用 `bun -e` 以 `JSON.parse` 确认可解析；已安装的 `omp-light` / `omp-light.cmd` 不属于同步内容。加 `check` 参数只报告差异、不写入也不提交：
 
 ```
 /sync-omp-config check
@@ -26,7 +26,7 @@
 /update-omp
 ```
 
-方向严格单向（仓库 `agent/` → 本机 active agent 目录，目录取非空 `PI_CODING_AGENT_DIR`，否则为 `~/.omp/agent`，会写本机）。常规只更新 `agents/`、`extensions/*.ts`、`APPEND_SYSTEM.md`、轻量模式三项资产（`config-light.yml`、`APPEND_SYSTEM_LIGHT.md`、`omp-light.ts`）和插件；`config.yml`、`settings.json` 等其余项默认不动，只有 `init` 参数才逐项确认后迁移。更新同时把轻量入口安装到 PATH 上已解析的 `omp` 可执行文件同目录：POSIX/macOS/Linux 为 `omp-light`，Windows 为 `omp-light.ts` 加 `omp-light.cmd`。扩展需要初始化或写配置文件时（如 `doc-polish.json`）若本机已存在就不动，否则询问用户。`check` 参数只报告差异、不写本机：
+方向严格单向（仓库 `agent/` → 本机 active agent 目录，将 `PI_CODING_AGENT_DIR` 去除首尾空白后非空则取其值，否则为 `~/.omp/agent`，会写本机）。常规只更新 `agents/`、`extensions/*.ts`、`APPEND_SYSTEM.md`、`thinking-translator.json`、轻量模式三项资产（`config-light.yml`、`APPEND_SYSTEM_LIGHT.md`、`omp-light.ts`）和插件；`config.yml`、`settings.json` 等其余项默认不动，只有 `init` 参数才逐项确认后迁移。`thinking-translator.json` 是 agent 根目录的常规托管文件（供 `omp-thinking-translator` 读取），有差异直接覆盖，覆盖前后用 `bun -e` 以 `JSON.parse` 确认可解析；这与 `doc-polish.json`（本机相关、本机已存在就不动，否则询问用户）、`commandcode-models.json`（本机生成、不迁移）不同。更新同时把轻量入口安装到 PATH 上已解析的 `omp` 可执行文件同目录：POSIX/macOS/Linux 为 `omp-light`，Windows 为 `omp-light.ts` 加 `omp-light.cmd`。扩展需要初始化或写配置文件时（如 `doc-polish.json`）若本机已存在就不动，否则询问用户。`check` 参数只报告差异、不写本机：
 
 ```
 /update-omp check
@@ -89,6 +89,7 @@ OMP 把 subagent 分成三类：`task:*` 负责执行，`discuss:*` 只读讨论
 - `agent/config-light.yml`：轻量模式配置覆盖
 - `agent/APPEND_SYSTEM_LIGHT.md`：轻量模式短追加提示词
 - `agent/omp-light.ts`：轻量入口的可移植 Bun shebang 源
+- `agent/thinking-translator.json`：思考过程翻译配置（`omp-thinking-translator` 读 agent 根目录）
 - `agent/agents/`：agent 定义
 - `agent/extensions/`：本地扩展代码
 
@@ -104,6 +105,7 @@ Orca 与 Otty 在运行时生成并重写 `agent/extensions/` 下的 `orca-*.ts`
 agent_dir="${PI_CODING_AGENT_DIR:-$HOME/.omp/agent}"
 mkdir -p "$agent_dir"
 cp agent/config.yml agent/settings.json agent/APPEND_SYSTEM.md \
+  agent/thinking-translator.json \
   agent/config-light.yml agent/APPEND_SYSTEM_LIGHT.md agent/omp-light.ts \
   "$agent_dir/"
 cp -a agent/agents agent/extensions "$agent_dir/"

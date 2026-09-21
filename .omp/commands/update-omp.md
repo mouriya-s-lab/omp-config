@@ -19,6 +19,7 @@ description: 用本仓库快照更新本机 OMP 配置（repo → 本机）
 | `agent/agents/` | `$AGENT_DIR/agents/` |
 | `agent/extensions/*.ts` | `$AGENT_DIR/extensions/` |
 | `agent/APPEND_SYSTEM.md` | `$AGENT_DIR/APPEND_SYSTEM.md` |
+| `agent/thinking-translator.json` | `$AGENT_DIR/thinking-translator.json` |
 | `agent/config-light.yml` | `$AGENT_DIR/config-light.yml` |
 | `agent/APPEND_SYSTEM_LIGHT.md` | `$AGENT_DIR/APPEND_SYSTEM_LIGHT.md` |
 | `agent/omp-light.ts` | `$AGENT_DIR/omp-light.ts`（light 源资产） |
@@ -54,6 +55,12 @@ description: 用本仓库快照更新本机 OMP 配置（repo → 本机）
 - `agent/APPEND_SYSTEM.md` 直接覆盖本机同名文件。
 - `agent/agents/` 覆盖到本机，先 `diff -rq` 确认范围再复制。
 
+## thinking-translator.json
+
+- `agent/thinking-translator.json` 是常规托管的根文件（非初始化项）：先比对仓库与本机差异，有差异再覆盖到本机 agent 目录。
+- 与 `doc-polish.json`（本机相关、缺失需询问才建）、`commandcode-models.json`（本机生成、不迁移）不同，本文件直接随常规更新迁移。
+- 覆盖前后都用 `bun -e` 以 `JSON.parse` 确认可解析。
+
 ## 扩展（extensions）
 
 1. 把仓库 `agent/extensions/*.ts` 复制/覆盖到本机（同名覆盖，缺的补齐）。
@@ -83,13 +90,15 @@ description: 用本仓库快照更新本机 OMP 配置（repo → 本机）
 
 1. 复制的普通文件（含三个 light 源资产）与仓库源 `cmp` 一致；已安装入口按上节的内容、权限和解析路径规则校验。
 
-2. 三个 light 源资产复制后，仓库 `agent/config-light.yml` 与本机 `$AGENT_DIR/config-light.yml` 都用 `bun -e` 的 `Bun.YAML.parse` 分别确认可解析；`init` 动过 `config.yml` / `settings.json` 时，对仓库源和本机目标分别用 `Bun.YAML.parse` / `JSON.parse` 确认可解析。
+2. 三个 light 源资产复制后，仓库 `agent/config-light.yml` 与本机 `$AGENT_DIR/config-light.yml` 都用 `bun -e` 的 `Bun.YAML.parse` 分别确认可解析；`init` 动过 `config.yml` / `settings.json` 时，对仓库源和本机目标分别用 `Bun.YAML.parse` / `JSON.parse` 确认可解析；复制或动过 `thinking-translator.json` 时用 `bun -e` 以 `JSON.parse` 确认可解析。
 3. 不打印凭据；不把明文凭据写进本机。
 4. 报告实际改了哪些文件、装 / 卸了哪些插件、哪些初始化或配置项因等用户确认被跳过。
 5. 生效需**重启 OMP**：APPEND_SYSTEM、扩展、插件在下次启动加载。
 
 ## 参数
 
-- 为空：常规更新（agents / extensions / APPEND_SYSTEM / 三个 light 源资产 / plugins，并安装或原子替换 `omp-light`）。
-- `check`：只逐项比对并报告差异（含三个 light 源资产、已安装入口、PATH shadowing，以及跑 `plugin-audit.sh` 展示插件对比），不复制、不装卸、不写本机。
+`$ARGUMENTS`
+
+- 为空：常规更新（agents / extensions / APPEND_SYSTEM / thinking-translator.json / 三个 light 源资产 / plugins，并安装或原子替换 `omp-light`）。
+- `check`：只逐项比对并报告差异（含 thinking-translator.json、三个 light 源资产、已安装入口、PATH shadowing，以及跑 `plugin-audit.sh` 展示插件对比），不复制、不装卸、不写本机。
 - `init`：在常规更新基础上，额外迁移 `config.yml` / `settings.json` 等初始项，逐项先确认。
