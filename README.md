@@ -40,7 +40,7 @@
 
 POSIX/macOS/Linux 原子安装为可执行的 `omp-light`，入口使用 `#!/usr/bin/env bun` shebang；bash、zsh、fish 和 Unix `pwsh` 使用同一个 shebang 入口，不依赖 Bash 专用脚本。Windows 原子安装为同目录的 `omp-light.ts` 与最小 `omp-light.cmd`；Windows PowerShell 使用生成的 `.cmd` shim。
 
-入口从 active agent 目录读取 `config-light.yml` 和 `APPEND_SYSTEM_LIGHT.md`（非空 `PI_CODING_AGENT_DIR` 优先，否则 `~/.omp/agent`），并只为本次进程使用短提示替换完整提示，通过配置覆盖禁用本仓库 `agent/extensions/` 下恰好 10 个可选行为扩展：`bro.ts`、`commandcode-usage.ts`、`ctx-post-compact-hint.ts`、`ctx-tasklog.ts`、`ctx-tool.ts`、`doc-polish.ts`、`lang-nag.ts`、`repo-rules.ts`、`tool-policy-nag.ts`、`watchdog-agent.ts`。以下 4 个兼容性/运行时修复仍保持加载：`commandcode-model-spec.ts`、`unified-exec-bun-pty.ts`、`v2-compaction-timeout.ts`、`xai-oauth-cost-ticks.ts`。这些是本次进程的覆盖，不会修改扩展文件。
+入口从 active agent 目录读取 `config-light.yml` 和 `APPEND_SYSTEM_LIGHT.md`（非空 `PI_CODING_AGENT_DIR` 优先，否则 `~/.omp/agent`），并只为本次进程使用短提示替换完整提示，通过配置覆盖禁用本仓库 `agent/extensions/` 下恰好 7 个可选行为扩展：`ctx-post-compact-hint.ts`、`ctx-tasklog.ts`、`ctx-tool.ts`、`doc-polish.ts`、`lang-nag.ts`、`tool-policy-nag.ts`、`watchdog-agent.ts`。核心扩展 `bro.ts`、`commandcode-usage.ts`、`repo-rules.ts` 仍保持加载；以下 4 个兼容性/运行时修复也保持加载：`commandcode-model-spec.ts`、`unified-exec-bun-pty.ts`、`v2-compaction-timeout.ts`、`xai-oauth-cost-ticks.ts`。这些是本次进程的覆盖，不会修改扩展文件。
 
 其余能力和设置保持不变：OMP 默认配置、已安装插件、tools、`AGENTS/context`、`rules`、`skills`，以及 `model`/`thinking`/`profile`/`auth`/`session` 设置均保留。`omp-light` 后面的 CLI 参数会原样转发给 `omp`，后置参数可以覆盖 launcher 先设置的同名参数。
 

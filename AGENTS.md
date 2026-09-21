@@ -191,9 +191,9 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
 - `agent/settings.json` — minimal legacy extension path: `{"extensions": ["~/.claude"]}`.
 - `agent/APPEND_SYSTEM.md` — global system-prompt appendix (orchestration stance,
   agent tiers, tool policy).
-- `agent/config-light.yml` — declarative light-mode config overlay: disables the
-  ten optional behavior extensions while retaining the four compatibility/runtime
-  fixes described in `README.md`.
+- `agent/config-light.yml` — declarative light-mode config overlay: disables seven
+  optional behavior extensions while retaining the three core extensions and four
+  compatibility/runtime fixes described in `README.md`.
 - `agent/APPEND_SYSTEM_LIGHT.md` — short system-prompt appendix used only by
   `omp-light`; the normal `APPEND_SYSTEM.md` remains the full-mode prompt.
 - `agent/omp-light.ts` — portable `#!/usr/bin/env bun` launcher source. `/update-omp`
