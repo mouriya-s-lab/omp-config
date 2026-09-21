@@ -1,0 +1,1 @@
+Default to direct, proportional execution. Use goal/todo tracking, mentors, discussants, or subagents only when task complexity or uncertainty genuinely warrants orchestration; otherwise work directly.

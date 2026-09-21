@@ -10,7 +10,7 @@
 /sync-omp-config
 ```
 
-方向严格单向（`~/.omp/agent` → 仓库 `agent/`），只读本机文件。加 `check` 参数只报告差异、不写入也不提交：
+方向严格单向（本机 active agent 目录 → 仓库 `agent/`，目录取非空 `PI_CODING_AGENT_DIR`，否则为 `~/.omp/agent`），只读本机文件。同步范围包含普通配置、扩展以及轻量模式的 `config-light.yml`、`APPEND_SYSTEM_LIGHT.md`、`omp-light.ts`；已安装的 `omp-light` / `omp-light.cmd` 不属于同步内容。加 `check` 参数只报告差异、不写入也不提交：
 
 ```
 /sync-omp-config check
@@ -26,13 +26,25 @@
 /update-omp
 ```
 
-方向严格单向（仓库 `agent/` → 本机 `~/.omp/agent`，会写本机）。常规只更新 `agents/`、`extensions/*.ts`、`APPEND_SYSTEM.md` 和插件；`config.yml`、`settings.json` 等其余项默认不动，只有 `init` 参数才逐项确认后迁移。扩展需要初始化或写配置文件时（如 `doc-polish.json`）若本机已存在就不动，否则询问用户。`check` 参数只报告差异、不写本机：
+方向严格单向（仓库 `agent/` → 本机 active agent 目录，目录取非空 `PI_CODING_AGENT_DIR`，否则为 `~/.omp/agent`，会写本机）。常规只更新 `agents/`、`extensions/*.ts`、`APPEND_SYSTEM.md`、轻量模式三项资产（`config-light.yml`、`APPEND_SYSTEM_LIGHT.md`、`omp-light.ts`）和插件；`config.yml`、`settings.json` 等其余项默认不动，只有 `init` 参数才逐项确认后迁移。更新同时把轻量入口安装到 PATH 上已解析的 `omp` 可执行文件同目录：POSIX/macOS/Linux 为 `omp-light`，Windows 为 `omp-light.ts` 加 `omp-light.cmd`。扩展需要初始化或写配置文件时（如 `doc-polish.json`）若本机已存在就不动，否则询问用户。`check` 参数只报告差异、不写本机：
 
 ```
 /update-omp check
 ```
 
 插件部分先跑根目录 `./plugin-audit.sh`：它以基准提交 `5974c4fa` 起扫 `install-plugins.sh` 的历史插件名，归一后直接与 `omp plugin list` 对比，给出待安装、卸载候选（历史存在过、现已从脚本移除、本机仍装）、保留和已同步四类结论。缺的插件跑 `./install-plugins.sh` 补齐；卸载候选先询问用户。命令定义在 `.omp/commands/update-omp.md`。
+
+## 轻量模式
+
+轻量入口由 `/update-omp` 从仓库安装，不是 checkout 内的脚本，也不需要创建 symlink。安装源是 `agent/omp-light.ts`；安装位置是 PATH 上已经解析的 `omp` 可执行文件所在目录，所以不需要把 checkout 或固定的 `~/.local/bin` 额外加入 PATH。安装后 `omp-light` 应解析到这个已安装入口；`check` 会比对三项轻量资产和安装入口，并报告 PATH 中的旧副本遮蔽（PATH shadowing）。
+
+POSIX/macOS/Linux 原子安装为可执行的 `omp-light`，入口使用 `#!/usr/bin/env bun` shebang；bash、zsh、fish 和 Unix `pwsh` 使用同一个 shebang 入口，不依赖 Bash 专用脚本。Windows 原子安装为同目录的 `omp-light.ts` 与最小 `omp-light.cmd`；Windows PowerShell 使用生成的 `.cmd` shim。
+
+入口从 active agent 目录读取 `config-light.yml` 和 `APPEND_SYSTEM_LIGHT.md`（非空 `PI_CODING_AGENT_DIR` 优先，否则 `~/.omp/agent`），并只为本次进程使用短提示替换完整提示，通过配置覆盖禁用本仓库 `agent/extensions/` 下恰好 10 个可选行为扩展：`bro.ts`、`commandcode-usage.ts`、`ctx-post-compact-hint.ts`、`ctx-tasklog.ts`、`ctx-tool.ts`、`doc-polish.ts`、`lang-nag.ts`、`repo-rules.ts`、`tool-policy-nag.ts`、`watchdog-agent.ts`。以下 4 个兼容性/运行时修复仍保持加载：`commandcode-model-spec.ts`、`unified-exec-bun-pty.ts`、`v2-compaction-timeout.ts`、`xai-oauth-cost-ticks.ts`。这些是本次进程的覆盖，不会修改扩展文件。
+
+其余能力和设置保持不变：OMP 默认配置、已安装插件、tools、`AGENTS/context`、`rules`、`skills`，以及 `model`/`thinking`/`profile`/`auth`/`session` 设置均保留。`omp-light` 后面的 CLI 参数会原样转发给 `omp`，后置参数可以覆盖 launcher 先设置的同名参数。
+
+普通 `omp` 始终是完整模式；轻量入口不持久化开关，也不改写完整模式配置。要恢复完整模式，直接执行 PATH 上的 `omp`，不要再调用 `omp-light`。安装输出由 `/update-omp` 管理；轻量部分由 `/sync-omp-config` 只同步三项 agent 轻量资产，不同步 PATH 中的入口或 shim。
 
 ## 同步两台不同机器上的omp供应商密钥，避免换一台机器就要登录
 
@@ -69,13 +81,18 @@ OMP 把 subagent 分成三类：`task:*` 负责执行，`discuss:*` 只读讨论
 
 ## 直接迁移
 
-以下内容直接复制到 `~/.omp/agent/`：
+以下内容直接复制到本机 active agent 目录（非空 `PI_CODING_AGENT_DIR` 优先，否则为 `~/.omp/agent`）：
 
 - `agent/config.yml`：OMP 配置和 UI 行为
 - `agent/settings.json`：扩展加载路径
 - `agent/APPEND_SYSTEM.md`：追加系统提示词
+- `agent/config-light.yml`：轻量模式配置覆盖
+- `agent/APPEND_SYSTEM_LIGHT.md`：轻量模式短追加提示词
+- `agent/omp-light.ts`：轻量入口的可移植 Bun shebang 源
 - `agent/agents/`：agent 定义
 - `agent/extensions/`：本地扩展代码
+
+安装目录中的 `omp-light`（POSIX）以及 Windows 的 `omp-light.ts` / `omp-light.cmd` 是安装输出，不属于仓库复制集。直接迁移除复制上述三项轻量资产外，还必须在目标机运行 `/update-omp`，或按同一安装契约把入口安装到 PATH 上已解析的 `omp` 同目录；只复制 `agent/` 文件不会让 `omp-light` 出现在 PATH。
 
 不要复制整个 `agent/` 目录。数据库、WAL、日志、会话、缓存和锁文件是运行时状态，不属于迁移内容；`models.yml` 和 `commandcode-models.json` 含本机 API key 或本机生成的目录，同样不迁移。
 
@@ -84,12 +101,15 @@ Orca 与 Otty 在运行时生成并重写 `agent/extensions/` 下的 `orca-*.ts`
 迁移前先备份并检查差异；迁移后重启 OMP：
 
 ```bash
-mkdir -p "$HOME/.omp/agent"
-cp agent/config.yml "$HOME/.omp/agent/config.yml"
-cp agent/settings.json "$HOME/.omp/agent/settings.json"
-cp agent/APPEND_SYSTEM.md "$HOME/.omp/agent/APPEND_SYSTEM.md"
-cp -a agent/agents agent/extensions "$HOME/.omp/agent/"
+agent_dir="${PI_CODING_AGENT_DIR:-$HOME/.omp/agent}"
+mkdir -p "$agent_dir"
+cp agent/config.yml agent/settings.json agent/APPEND_SYSTEM.md \
+  agent/config-light.yml agent/APPEND_SYSTEM_LIGHT.md agent/omp-light.ts \
+  "$agent_dir/"
+cp -a agent/agents agent/extensions "$agent_dir/"
 ```
+
+复制后按上面的安装契约安装 `omp-light`；其中 PATH 上的 `omp` 必须先存在。Windows PowerShell 需要生成的 `omp-light.cmd` shim，不能把 POSIX 可执行文件当作 Windows 入口。
 
 ## 本地扩展的运行时行为
 

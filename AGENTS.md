@@ -4,11 +4,12 @@
 
 `omp-config` is the auditable, version-controlled slice of the user's Oh My Pi
 (`omp`) coding-harness configuration — **not** a full `~/.omp` backup
-(`README.md:1-3`). It holds only reviewable inputs: harness config, the appended
-system prompt, custom subagent definitions, local TypeScript extensions, the
-plugin install list, and the maintenance commands that move state between this
-repo and a machine's live `~/.omp/agent`. Runtime state (databases, sessions,
-caches, credentials) is deliberately excluded.
+(`README.md:1-3`). It holds only reviewable inputs: harness config, full and
+light system prompts, light-mode config and launcher source, custom subagent
+definitions, local TypeScript extensions, the plugin install list, and the
+maintenance commands that move state between this repo and a machine's live
+active agent directory and install its PATH launcher. Runtime state (databases,
+sessions, caches, credentials) is deliberately excluded.
 
 The repo is consumed by `omp` in two directions:
 - **repo → machine**: `/update-omp` applies this snapshot to the live agent dir.
@@ -22,17 +23,25 @@ flowchart LR
     A["agent/config.yml"]
     S["agent/settings.json"]
     P["agent/APPEND_SYSTEM.md"]
+    L1["agent/config-light.yml"]
+    L2["agent/APPEND_SYSTEM_LIGHT.md"]
+    L3["agent/omp-light.ts"]
     G["agent/agents/*.md"]
     E["agent/extensions/*.ts"]
     I["install-plugins.sh"]
   end
-  subgraph machine["~/.omp/agent (live)"]
+  subgraph machine["active agent dir"]
     LA["config.yml / settings.json"]
     LG["agents/"]
     LE["extensions/"]
+    LL["config-light.yml / APPEND_SYSTEM_LIGHT.md / omp-light.ts"]
     PL["~/.omp/plugins/"]
   end
+  O["PATH directory beside resolved omp"]
+  M["omp-light (POSIX) / omp-light.ts + .cmd (Windows)"]
   repo -->|"/update-omp [init]"| machine
+  repo -->|"/update-omp: install entry"| O
+  O --> M
   machine -->|"/sync-omp-config (read-only src)"| repo
   I -->|"omp install"| PL
   machine -->|restart| H["omp harness picks up changes"]
@@ -41,14 +50,16 @@ flowchart LR
 - **Config vs behavior are separated.** Agent *responsibilities* live in
   `agent/APPEND_SYSTEM.md` + `agent/agents/*.md`; agent *model bindings* live only
   in `agent/config.yml` under `task.agentModelOverrides`. Changing a model never
-  changes an agent's capability boundary (`README.md:51-66`).
+  changes an agent's capability boundary (`README.md`).
 - **Extensions are loaded per session** from the paths in `settings.json` /
   `config.yml`; each is a default-exported function that registers tools/commands
   or subscribes to lifecycle events on the `ExtensionAPI` (`pi`).
 - **Two one-way syncs, never one "sync".** `/sync-omp-config` never writes the
-  machine; `/update-omp` writes the machine (`.omp/commands/*.md`).
+  machine; its sync range includes the three light assets but excludes installed
+  PATH launchers. `/update-omp` writes the machine and installs `omp-light` beside
+  the resolved `omp` executable (`.omp/commands/*.md`).
 - **Plugins are runtime state**, installed via `omp install` into
-  `~/.omp/plugins/` and never copied into this repo (`README.md:193-208`).
+  `~/.omp/plugins/` and never copied into this repo (`README.md`).
 
 ## Key Directories
 
@@ -59,14 +70,15 @@ flowchart LR
 | `agent/agents/` | Custom subagent definitions (`*.md`) + `README.txt` authoring pitfalls. |
 | `.omp/commands/` | Project-level slash-command definitions run from repo root. |
 | repo root | `install-plugins.sh`, `plugin-audit.sh`, `README.md` (authoritative, in Chinese). |
+| `agent/config-light.yml`, `agent/APPEND_SYSTEM_LIGHT.md`, `agent/omp-light.ts` | Light-mode assets are included in both sync directions; `/update-omp` copies them to the active agent dir and installs the PATH entry beside the resolved `omp`. Generated `omp-light` / `omp-light.cmd` entries are not repo files. |
 
 ## Development Commands
 
 Slash commands run inside `omp` started at the repo root:
 
 ```
-/update-omp [check|init]      # repo -> machine (writes). init also migrates config.yml/settings.json per-item
-/sync-omp-config [check]      # machine -> repo (repo write only). Full mode commits+pushes
+/update-omp [check|init]      # repo -> machine (writes); installs omp-light beside PATH's resolved omp. init also migrates config.yml/settings.json per-item
+/sync-omp-config [check]      # machine -> repo (repo write only); syncs light assets, never installed PATH entries. Full mode commits+pushes
 /migrate-omp-keys <target>    # SSH-copy auth_credentials to a remote omp host (not a snapshot path)
 ```
 
@@ -143,7 +155,7 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
 ### Subagent definitions (`agent/agents/*.md`)
 
 - YAML frontmatter: `name`, `description`, `spawns` (comma list). **No `model`
-  field** — model binding lives in `config.yml` (`README.md:51-66`).
+  field** — model binding lives in `config.yml`.
 - Prefer an explicit `spawns` allowlist over `"*"`; the **first** listed name is
   the silent default for an omitted `agent`, so files list `task:mid` first
   (`agent/agents/README.txt:24-35`).
@@ -167,6 +179,15 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
 - `agent/settings.json` — minimal legacy extension path: `{"extensions": ["~/.claude"]}`.
 - `agent/APPEND_SYSTEM.md` — global system-prompt appendix (orchestration stance,
   agent tiers, tool policy).
+- `agent/config-light.yml` — declarative light-mode config overlay: disables the
+  ten optional behavior extensions while retaining the four compatibility/runtime
+  fixes described in `README.md`.
+- `agent/APPEND_SYSTEM_LIGHT.md` — short system-prompt appendix used only by
+  `omp-light`; the normal `APPEND_SYSTEM.md` remains the full-mode prompt.
+- `agent/omp-light.ts` — portable `#!/usr/bin/env bun` launcher source. `/update-omp`
+  installs it as executable `omp-light` on POSIX/macOS/Linux, or as
+  `omp-light.ts` plus a generated `omp-light.cmd` on Windows, beside the resolved
+  `omp`; generated entries are not part of the repo copy set.
 - `agent/extensions/doc-polish.json` — active config for `doc-polish.ts`
   (`splitModel`, `polishModel`, `concurrency`; `checkModel` optional, omitted
   here). A cwd-local `doc-polish.json` wins over this one. **Distinct** from `ctx`
@@ -180,12 +201,21 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
 - `.omp/commands/{update-omp,sync-omp-config,migrate-omp-keys}.md` — the command
   contracts; read these for exact copy/exclusion/validation rules.
 
-Direct-migration copy set (never copy the whole `agent/`; `README.md:84-90`):
+Direct-migration copy set (never copy the whole `agent/`; `README.md`):
 
 ```bash
-cp agent/config.yml agent/settings.json agent/APPEND_SYSTEM.md "$HOME/.omp/agent/"
-cp -a agent/agents agent/extensions "$HOME/.omp/agent/"
+agent_dir="${PI_CODING_AGENT_DIR:-$HOME/.omp/agent}"
+mkdir -p "$agent_dir"
+cp agent/config.yml agent/settings.json agent/APPEND_SYSTEM.md \
+  agent/config-light.yml agent/APPEND_SYSTEM_LIGHT.md agent/omp-light.ts \
+  "$agent_dir/"
+cp -a agent/agents agent/extensions "$agent_dir/"
 ```
+
+The installed `omp-light` / `omp-light.cmd` entries are generated outputs, not
+copy-set files. Direct migration must also run `/update-omp` on the target, or
+perform the same installation beside the resolved `omp` on `PATH`; copying the
+three light assets alone does not make `omp-light` resolvable.
 
 ## Runtime/Tooling Preferences
 
@@ -198,8 +228,10 @@ cp -a agent/agents agent/extensions "$HOME/.omp/agent/"
   machine state, not repo content.
 - **Active agent dir:** `$PI_CODING_AGENT_DIR` if set and non-empty, else
   `~/.omp/agent`. The PTY native cache sits one level above the agent dir.
+- The installed `omp-light` entry is not stored in the active agent dir: it is
+  placed beside the resolved `omp` executable so the existing `PATH` finds it.
 - **Restart required:** `APPEND_SYSTEM.md`, extensions, and plugins take effect on
-  the next `omp` start (`.omp/commands/update-omp.md:52-59`); agent `*.md` edits
+  the next `omp` start (`.omp/commands/update-omp.md`); agent `*.md` edits
   apply on next spawn without restart.
 - **Never commit** (per `.gitignore`): `agent/*.db*`, `*.lock`, `config.yml.lock`,
   `models.yml*`, `commandcode-models.json`, `sessions/`, `terminal-sessions/`,
