@@ -12,7 +12,7 @@ description: 把本机 OMP provider 凭据经 SSH 迁到远端 OMP 主机
 
 ## 路径
 
-本地用当前 active 库：`PI_CODING_AGENT_DIR` 非空时取其下 `agent.db`，否则 `~/.omp/agent/agent.db`。远端同样按此规则取 active/default 库。任一端缺 `agent.db`、缺 `ssh`/`sqlite3` 或传输失败都直接中止。
+本地用 `~/.omp/agent/agent.db`。远端同样取其 `~/.omp/agent/agent.db`。任一端缺 `agent.db`、缺 `ssh`/`sqlite3` 或传输失败都直接中止。
 
 ## 步骤
 
