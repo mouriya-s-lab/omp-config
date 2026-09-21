@@ -6,10 +6,11 @@
 (`omp`) coding-harness configuration — **not** a full `~/.omp` backup
 (`README.md:1-3`). It holds only reviewable inputs: harness config, full and
 light system prompts, light-mode config and launcher source, custom subagent
-definitions, local TypeScript extensions, the plugin install list, and the
-maintenance commands that move state between this repo and a machine's live
-active agent directory and install its PATH launcher. Runtime state (databases,
-sessions, caches, credentials) is deliberately excluded.
+definitions, local TypeScript extensions, the agent-root
+`thinking-translator.json` for `omp-thinking-translator`, the plugin install
+list, and the maintenance commands that move state between this repo and a
+machine's live active agent directory and install its PATH launcher. Runtime
+state (databases, sessions, caches, credentials) is deliberately excluded.
 
 The repo is consumed by `omp` in two directions:
 - **repo → machine**: `/update-omp` applies this snapshot to the live agent dir.
@@ -26,12 +27,14 @@ flowchart LR
     L1["agent/config-light.yml"]
     L2["agent/APPEND_SYSTEM_LIGHT.md"]
     L3["agent/omp-light.ts"]
+    T["agent/thinking-translator.json"]
     G["agent/agents/*.md"]
     E["agent/extensions/*.ts"]
     I["install-plugins.sh"]
   end
   subgraph machine["active agent dir"]
     LA["config.yml / settings.json"]
+    LT["thinking-translator.json"]
     LG["agents/"]
     LE["extensions/"]
     LL["config-light.yml / APPEND_SYSTEM_LIGHT.md / omp-light.ts"]
@@ -55,9 +58,17 @@ flowchart LR
   `config.yml`; each is a default-exported function that registers tools/commands
   or subscribes to lifecycle events on the `ExtensionAPI` (`pi`).
 - **Two one-way syncs, never one "sync".** `/sync-omp-config` never writes the
-  machine; its sync range includes the three light assets but excludes installed
-  PATH launchers. `/update-omp` writes the machine and installs `omp-light` beside
-  the resolved `omp` executable (`.omp/commands/*.md`).
+  machine; its sync range includes the three light assets and the agent-root
+  `thinking-translator.json` but excludes installed PATH launchers.
+  `/update-omp` writes the machine and installs `omp-light` beside the resolved
+  `omp` executable (`.omp/commands/*.md`).
+- **Agent-root `thinking-translator.json` is managed in both directions** as a
+  regular (non-`init`) item: `/sync-omp-config` diffs the live file into
+  `agent/thinking-translator.json` (machine → repo); `/update-omp` diffs the
+  snapshot back onto the machine (repo → machine, honoring
+  `$PI_CODING_AGENT_DIR`). Both sides validate it with `bun -e` + `JSON.parse`.
+  It is **not** like `doc-polish.json` (machine-local, prompt-overridable) or
+  `commandcode-models.json` (machine-generated, never migrated).
 - **Plugins are runtime state**, installed via `omp install` into
   `~/.omp/plugins/` and never copied into this repo (`README.md`).
 
@@ -66,8 +77,9 @@ flowchart LR
 | Path | Purpose |
 | --- | --- |
 | `agent/` | Managed harness config. Only listed items are portable; the whole dir is **not**. |
-| `agent/extensions/` | Local TypeScript extensions (the code core). 15 `.ts` (incl. `bro.ts`, the built-in-AI rewrite of the former `pi-bro` plugin, and `watchdog-agent.ts`) + `doc-polish.json`/`lang-nag.json` sidecars. |
+| `agent/extensions/` | Local TypeScript extensions (the code core). 15 `.ts` (incl. `bro.ts`, the built-in-AI rewrite of the former `pi-bro` plugin, and `watchdog-agent.ts`) + `doc-polish.json`/`lang-nag.json` sidecars (`doc-polish.json` is machine-local/prompt-overridable — see Important Files). |
 | `agent/agents/` | Custom subagent definitions (`*.md`) + `README.txt` authoring pitfalls. |
+| `agent/thinking-translator.json` | Agent-root translator config for `omp-thinking-translator`. Portable regular item: `/sync-omp-config` carries machine → repo, `/update-omp` carries repo → machine. |
 | `.omp/commands/` | Project-level slash-command definitions run from repo root. |
 | repo root | `install-plugins.sh`, `plugin-audit.sh`, `README.md` (authoritative, in Chinese). |
 | `agent/config-light.yml`, `agent/APPEND_SYSTEM_LIGHT.md`, `agent/omp-light.ts` | Light-mode assets are included in both sync directions; `/update-omp` copies them to the active agent dir and installs the PATH entry beside the resolved `omp`. Generated `omp-light` / `omp-light.cmd` entries are not repo files. |
@@ -188,14 +200,20 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
   installs it as executable `omp-light` on POSIX/macOS/Linux, or as
   `omp-light.ts` plus a generated `omp-light.cmd` on Windows, beside the resolved
   `omp`; generated entries are not part of the repo copy set.
+- `agent/thinking-translator.json` — agent-root config read by
+  `omp-thinking-translator` at the live agent dir. Managed regular item in both
+  directions (diff-then-copy; validate with `bun -e` + `JSON.parse`). Unlike
+  `agent/extensions/doc-polish.json` below, it is portable, not machine-local.
 - `agent/extensions/doc-polish.json` — active config for `doc-polish.ts`
   (`splitModel`, `polishModel`, `concurrency`; `checkModel` optional, omitted
-  here). A cwd-local `doc-polish.json` wins over this one. **Distinct** from `ctx`
+  here). Machine-local and prompt-overridable: `/update-omp` never touches an
+  existing live copy and asks before creating a missing one. A cwd-local
+  `doc-polish.json` wins over this one. **Distinct** from `ctx`
   `.md`/`.json` sidecar artifacts.
 - `install-plugins.sh` — declared plugin list: `pi-commandcode-provider`,
   `pi-package-search`, `pi-unified-exec`, `pi-pretty-codeblocks`, `pi-schedule`, and
   the GitHub URL `Mouriya-Emma/omp-thinking-translator` (unpinned; `omp install`
-  resolves versions). The former `pi-bro` plugin is now the local `agent/extensions/bro.ts`.
+  resolves versions; its runtime config is the portable agent-root `thinking-translator.json` above). The former `pi-bro` plugin is now the local `agent/extensions/bro.ts`.
 - `plugin-audit.sh` — drift report; base commit `5974c4fa`; requires `omp` on PATH
   and a git worktree.
 - `.omp/commands/{update-omp,sync-omp-config,migrate-omp-keys}.md` — the command
@@ -207,6 +225,7 @@ Direct-migration copy set (never copy the whole `agent/`; `README.md`):
 agent_dir="${PI_CODING_AGENT_DIR:-$HOME/.omp/agent}"
 mkdir -p "$agent_dir"
 cp agent/config.yml agent/settings.json agent/APPEND_SYSTEM.md \
+  agent/thinking-translator.json \
   agent/config-light.yml agent/APPEND_SYSTEM_LIGHT.md agent/omp-light.ts \
   "$agent_dir/"
 cp -a agent/agents agent/extensions "$agent_dir/"
@@ -226,12 +245,12 @@ three light assets alone does not make `omp-light` resolvable.
 - **Plugins:** installed with `omp install` (network) into `~/.omp/plugins/`
   (`package.json`, `bun.lock`, `node_modules/`, `omp-plugins.lock.json`). These are
   machine state, not repo content.
-- **Active agent dir:** `$PI_CODING_AGENT_DIR` if set and non-empty, else
+- **Active agent dir:** trimmed, non-empty `$PI_CODING_AGENT_DIR` if set; otherwise
   `~/.omp/agent`. The PTY native cache sits one level above the agent dir.
 - The installed `omp-light` entry is not stored in the active agent dir: it is
   placed beside the resolved `omp` executable so the existing `PATH` finds it.
 - **Restart required:** `APPEND_SYSTEM.md`, extensions, and plugins take effect on
-  the next `omp` start (`.omp/commands/update-omp.md`); agent `*.md` edits
+  the next `omp` start (`.omp/commands/update-omp.md:89-96`); agent `*.md` edits
   apply on next spawn without restart.
 - **Never commit** (per `.gitignore`): `agent/*.db*`, `*.lock`, `config.yml.lock`,
   `models.yml*`, `commandcode-models.json`, `sessions/`, `terminal-sessions/`,
@@ -249,7 +268,7 @@ three light assets alone does not make `omp-light` resolvable.
 - **`plugin-audit.sh` validates the plugin *list*, not extension code** — it
   cannot prove anything about a `.ts` edit.
 - **How to validate a change here:**
-  1. `bun -e` parse check for any changed YAML/JSON (`config.yml`, `*.json`).
+  1. `bun -e` parse check for any changed YAML/JSON (`config.yml`, `*.json`) — including `agent/thinking-translator.json` via `JSON.parse` on both sync and update paths.
   2. For an extension change, the only real proof is runtime: apply via
      `/update-omp` (or the `cp` set), **restart `omp`**, and exercise the actual
      tool/command/hook (e.g. run `ctx list`, `/polish-doc <file>`, trigger the
