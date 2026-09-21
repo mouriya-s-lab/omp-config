@@ -8,7 +8,7 @@ description: 用本仓库快照更新本机 OMP 配置（repo → 本机）
 
 ## 方向
 
-严格单向：仓库 `agent/` → 本机活动 agent 目录（**会写本机**）。与 `/sync-omp-config`（本机→仓库、只读本机）互为反向。本机 agent 目录取值：`PI_CODING_AGENT_DIR` 非空时取其目录，否则 `~/.omp/agent`；以下统一记为 `$AGENT_DIR`。先将其解析为绝对路径，再开始写入。
+严格单向：仓库 `agent/` → 本机 `~/.omp/agent`（**会写本机**）。与 `/sync-omp-config`（本机→仓库、只读本机）互为反向。先把 `~/.omp/agent` 展开为绝对路径，再开始写入。
 
 ## 更新范围
 
@@ -16,13 +16,13 @@ description: 用本仓库快照更新本机 OMP 配置（repo → 本机）
 
 | 仓库 | 本机 |
 | --- | --- |
-| `agent/agents/` | `$AGENT_DIR/agents/` |
-| `agent/extensions/*.ts` | `$AGENT_DIR/extensions/` |
-| `agent/APPEND_SYSTEM.md` | `$AGENT_DIR/APPEND_SYSTEM.md` |
-| `agent/thinking-translator.json` | `$AGENT_DIR/thinking-translator.json` |
-| `agent/config-light.yml` | `$AGENT_DIR/config-light.yml` |
-| `agent/APPEND_SYSTEM_LIGHT.md` | `$AGENT_DIR/APPEND_SYSTEM_LIGHT.md` |
-| `agent/omp-light.ts` | `$AGENT_DIR/omp-light.ts`（light 源资产） |
+| `agent/agents/` | `~/.omp/agent/agents/` |
+| `agent/extensions/*.ts` | `~/.omp/agent/extensions/` |
+| `agent/APPEND_SYSTEM.md` | `~/.omp/agent/APPEND_SYSTEM.md` |
+| `agent/thinking-translator.json` | `~/.omp/agent/thinking-translator.json` |
+| `agent/config-light.yml` | `~/.omp/agent/config-light.yml` |
+| `agent/APPEND_SYSTEM_LIGHT.md` | `~/.omp/agent/APPEND_SYSTEM_LIGHT.md` |
+| `agent/omp-light.ts` | `~/.omp/agent/omp-light.ts`（light 源资产） |
 | `install-plugins.sh` 的插件列表 | 本机已装插件 |
 
 `agent/config-light.yml`、`agent/APPEND_SYSTEM_LIGHT.md`、`agent/omp-light.ts` 必须作为一个整体更新；缺任一仓库源文件就报告精确缺失项并停止 light 安装，不以旧文件或根目录旧版 `omp-light` 代替。
@@ -32,7 +32,7 @@ description: 用本仓库快照更新本机 OMP 配置（repo → 本机）
 `/update-omp` 必须先预检这三个源资产和 PATH 上的 `omp`，再写入任何 light 文件：
 
 1. 解析 `$OMP_PATH = Bun.which("omp")`，要求结果是 PATH 上已有的绝对路径；找不到 `omp` 或无法得到绝对路径时报告精确原因并停止，不创建目录、不留下半套安装。
-2. 预检全部成功后，若 `$AGENT_DIR` 或其所需父目录不存在才创建；将 `agent/config-light.yml`、`agent/APPEND_SYSTEM_LIGHT.md`、`agent/omp-light.ts` 分别复制到 `$AGENT_DIR` 对应路径。每个目标先写入同目录临时文件，完成内容校验后以原子 rename 替换；不得直接截断目标文件。
+2. 预检全部成功后，若 `~/.omp/agent` 或其所需父目录不存在才创建；将 `agent/config-light.yml`、`agent/APPEND_SYSTEM_LIGHT.md`、`agent/omp-light.ts` 分别复制到 `~/.omp/agent` 对应路径。每个目标先写入同目录临时文件，完成内容校验后以原子 rename 替换；不得直接截断目标文件。
 3. 取 `$OMP_BIN_DIR = dirname($OMP_PATH)`，把启动器安装在这个**已经在 PATH 上的目录**，不另选目录：
    - **POSIX（macOS / Linux）**：将 `agent/omp-light.ts` 的原始内容以同目录临时文件写入 `$OMP_BIN_DIR/omp-light`，先设置可执行权限 `0755`，再原子 rename 覆盖目标。它必须是带 `#!/usr/bin/env bun` 的源内容本身，不得套一层 wrapper。
    - **Windows**：将同一源内容以同目录临时文件写入 `$OMP_BIN_DIR/omp-light.ts`，并原子写入同目录的 `$OMP_BIN_DIR/omp-light.cmd`。`.cmd` 只做 Bun 转发并保留所有参数，例如：
@@ -48,7 +48,7 @@ description: 用本仓库快照更新本机 OMP 配置（repo → 本机）
 
 ## `check` 模式的 light 检查
 
-`check` 必须只读：按同样的 `$AGENT_DIR`、`Bun.which("omp")` 和 `$OMP_BIN_DIR` 解析，逐项比较三个 light 源资产、已复制到 `$AGENT_DIR` 的文件、已安装入口的内容与权限，并重新解析 `omp-light` 检查 PATH shadowing。若 `omp` 缺失或无法绝对化，仍报告源资产差异，并明确报告安装入口无法定位。缺失、内容不同、权限不符、解析到其他路径都要报告实际路径和期望路径。不得 mkdir、复制、chmod、rename、覆盖、安装/卸载插件或修改任何 shell/PATH；`plugin-audit.sh` 只能按现有规则读取并报告。
+`check` 必须只读：按同样的 `~/.omp/agent`、`Bun.which("omp")` 和 `$OMP_BIN_DIR` 解析，逐项比较三个 light 源资产、已复制到 `~/.omp/agent` 的文件、已安装入口的内容与权限，并重新解析 `omp-light` 检查 PATH shadowing。若 `omp` 缺失或无法绝对化，仍报告源资产差异，并明确报告安装入口无法定位。缺失、内容不同、权限不符、解析到其他路径都要报告实际路径和期望路径。不得 mkdir、复制、chmod、rename、覆盖、安装/卸载插件或修改任何 shell/PATH；`plugin-audit.sh` 只能按现有规则读取并报告。
 
 ## APPEND_SYSTEM 与 agents
 
@@ -57,7 +57,7 @@ description: 用本仓库快照更新本机 OMP 配置（repo → 本机）
 
 ## thinking-translator.json
 
-- `agent/thinking-translator.json` 是常规托管的根文件（非初始化项）：先比对仓库与本机差异，有差异再覆盖到本机 agent 目录。
+- `agent/thinking-translator.json` 是常规托管的根文件（非初始化项）：先比对仓库与本机差异，有差异再覆盖到本机 `~/.omp/agent`。
 - 与 `doc-polish.json`（本机相关、缺失需询问才建）、`commandcode-models.json`（本机生成、不迁移）不同，本文件直接随常规更新迁移。
 - 覆盖前后都用 `bun -e` 以 `JSON.parse` 确认可解析。
 
@@ -90,7 +90,7 @@ description: 用本仓库快照更新本机 OMP 配置（repo → 本机）
 
 1. 复制的普通文件（含三个 light 源资产）与仓库源 `cmp` 一致；已安装入口按上节的内容、权限和解析路径规则校验。
 
-2. 三个 light 源资产复制后，仓库 `agent/config-light.yml` 与本机 `$AGENT_DIR/config-light.yml` 都用 `bun -e` 的 `Bun.YAML.parse` 分别确认可解析；`init` 动过 `config.yml` / `settings.json` 时，对仓库源和本机目标分别用 `Bun.YAML.parse` / `JSON.parse` 确认可解析；复制或动过 `thinking-translator.json` 时用 `bun -e` 以 `JSON.parse` 确认可解析。
+2. 三个 light 源资产复制后，仓库 `agent/config-light.yml` 与本机 `~/.omp/agent/config-light.yml` 都用 `bun -e` 的 `Bun.YAML.parse` 分别确认可解析；`init` 动过 `config.yml` / `settings.json` 时，对仓库源和本机目标分别用 `Bun.YAML.parse` / `JSON.parse` 确认可解析；复制或动过 `thinking-translator.json` 时用 `bun -e` 以 `JSON.parse` 确认可解析。
 3. 不打印凭据；不把明文凭据写进本机。
 4. 报告实际改了哪些文件、装 / 卸了哪些插件、哪些初始化或配置项因等用户确认被跳过。
 5. 生效需**重启 OMP**：APPEND_SYSTEM、扩展、插件在下次启动加载。

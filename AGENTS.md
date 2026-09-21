@@ -9,11 +9,11 @@ light system prompts, light-mode config and launcher source, custom subagent
 definitions, local TypeScript extensions, the agent-root
 `thinking-translator.json` for `omp-thinking-translator`, the plugin install
 list, and the maintenance commands that move state between this repo and a
-machine's live active agent directory and install its PATH launcher. Runtime
+machine's live `~/.omp/agent` and install its PATH launcher. Runtime
 state (databases, sessions, caches, credentials) is deliberately excluded.
 
 The repo is consumed by `omp` in two directions:
-- **repo → machine**: `/update-omp` applies this snapshot to the live agent dir.
+- **repo → machine**: `/update-omp` applies this snapshot to `~/.omp/agent`.
 - **machine → repo**: `/sync-omp-config` captures eligible local state back here.
 
 ## Architecture & Data Flow
@@ -32,7 +32,7 @@ flowchart LR
     E["agent/extensions/*.ts"]
     I["install-plugins.sh"]
   end
-  subgraph machine["active agent dir"]
+  subgraph machine["~/.omp/agent"]
     LA["config.yml / settings.json"]
     LT["thinking-translator.json"]
     LG["agents/"]
@@ -65,8 +65,8 @@ flowchart LR
 - **Agent-root `thinking-translator.json` is managed in both directions** as a
   regular (non-`init`) item: `/sync-omp-config` diffs the live file into
   `agent/thinking-translator.json` (machine → repo); `/update-omp` diffs the
-  snapshot back onto the machine (repo → machine, honoring
-  `$PI_CODING_AGENT_DIR`). Both sides validate it with `bun -e` + `JSON.parse`.
+  snapshot back onto the machine (repo → machine, `~/.omp/agent`). Both sides
+  validate it with `bun -e` + `JSON.parse`.
   It is **not** like `doc-polish.json` (machine-local, prompt-overridable) or
   `commandcode-models.json` (machine-generated, never migrated).
 - **Plugins are runtime state**, installed via `omp install` into
@@ -82,7 +82,7 @@ flowchart LR
 | `agent/thinking-translator.json` | Agent-root translator config for `omp-thinking-translator`. Portable regular item: `/sync-omp-config` carries machine → repo, `/update-omp` carries repo → machine. |
 | `.omp/commands/` | Project-level slash-command definitions run from repo root. |
 | repo root | `install-plugins.sh`, `plugin-audit.sh`, `README.md` (authoritative, in Chinese). |
-| `agent/config-light.yml`, `agent/APPEND_SYSTEM_LIGHT.md`, `agent/omp-light.ts` | Light-mode assets are included in both sync directions; `/update-omp` copies them to the active agent dir and installs the PATH entry beside the resolved `omp`. Generated `omp-light` / `omp-light.cmd` entries are not repo files. |
+| `agent/config-light.yml`, `agent/APPEND_SYSTEM_LIGHT.md`, `agent/omp-light.ts` | Light-mode assets are included in both sync directions; `/update-omp` copies them to `~/.omp/agent` and installs the PATH entry beside the resolved `omp`. Generated `omp-light` / `omp-light.cmd` entries are not repo files. |
 
 ## Development Commands
 
@@ -201,7 +201,7 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
   `omp-light.ts` plus a generated `omp-light.cmd` on Windows, beside the resolved
   `omp`; generated entries are not part of the repo copy set.
 - `agent/thinking-translator.json` — agent-root config read by
-  `omp-thinking-translator` at the live agent dir. Managed regular item in both
+  `omp-thinking-translator` at `~/.omp/agent`. Managed regular item in both
   directions (diff-then-copy; validate with `bun -e` + `JSON.parse`). Unlike
   `agent/extensions/doc-polish.json` below, it is portable, not machine-local.
 - `agent/extensions/doc-polish.json` — active config for `doc-polish.ts`
@@ -222,13 +222,12 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
 Direct-migration copy set (never copy the whole `agent/`; `README.md`):
 
 ```bash
-agent_dir="${PI_CODING_AGENT_DIR:-$HOME/.omp/agent}"
-mkdir -p "$agent_dir"
+mkdir -p "$HOME/.omp/agent"
 cp agent/config.yml agent/settings.json agent/APPEND_SYSTEM.md \
   agent/thinking-translator.json \
   agent/config-light.yml agent/APPEND_SYSTEM_LIGHT.md agent/omp-light.ts \
-  "$agent_dir/"
-cp -a agent/agents agent/extensions "$agent_dir/"
+  "$HOME/.omp/agent/"
+cp -a agent/agents agent/extensions "$HOME/.omp/agent/"
 ```
 
 The installed `omp-light` / `omp-light.cmd` entries are generated outputs, not
@@ -245,9 +244,8 @@ three light assets alone does not make `omp-light` resolvable.
 - **Plugins:** installed with `omp install` (network) into `~/.omp/plugins/`
   (`package.json`, `bun.lock`, `node_modules/`, `omp-plugins.lock.json`). These are
   machine state, not repo content.
-- **Active agent dir:** trimmed, non-empty `$PI_CODING_AGENT_DIR` if set; otherwise
-  `~/.omp/agent`. The PTY native cache sits one level above the agent dir.
-- The installed `omp-light` entry is not stored in the active agent dir: it is
+- **Agent dir:** `~/.omp/agent`. The PTY native cache sits one level above it.
+- The installed `omp-light` entry is not stored in `~/.omp/agent`: it is
   placed beside the resolved `omp` executable so the existing `PATH` finds it.
 - **Restart required:** `APPEND_SYSTEM.md`, extensions, and plugins take effect on
   the next `omp` start (`.omp/commands/update-omp.md:89-96`); agent `*.md` edits
