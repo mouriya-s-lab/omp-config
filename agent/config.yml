@@ -22,7 +22,7 @@ task:
     discuss:divergent: "commandcode/deepseek/deepseek-v4.1-flash, openai-codex/gpt-6-luna:max"
     discuss:steady: openai-codex/gpt-6-luna:max
     mentor:default: "openai-codex/gpt-5.6-sol:high, openai-codex/gpt-6-luna:max"
-    task:high: anthropic/claude-opus-5-5:high
+    task:high: anthropic/claude-opus-5-5:medium
     task:mid: openai-codex/gpt-6-sol:high
     task:free: "bansos/muse-spark-1.3-contributor:xhigh, opencode-go/muse-spark-1.3-contributor:xhigh, openai-codex/gpt-6-luna:max"
     task:low: openai-codex/gpt-6-luna:max
