@@ -21,7 +21,9 @@ Claude Code 让主 agent 知道子 agent 的 worktree，并不主要靠子 agent
 
 ### 隔离由调用和定义选择，不是普遍默认
 
-`AgentInput.isolation?: "worktree" | "remote"` 是单次调用的选择；agent 定义也可设置 `isolation`。调度代码 `an` 取调用参数优先、定义次之；`Hn` 再决定本地/远端和同步/后台。未指定 worktree 的本地子 agent 可共用工作目录。另有提示在并行写入可能碰撞时建议为每个 agent 指定 worktree，但提示不等于运行时自动为所有子 agent 分配 worktree。内置 web-fetch agent 会忽略这种隔离请求。证据：`sdk-tools.d.ts:750–786`；二进制偏移 `183916662` 起的 `an`、`Hn`、`go`，以及偏移 `180364101` 起的并行写入提示。
+`AgentInput.isolation?: "worktree" | "remote"` 是单次调用的选择；agent 定义也可设置 `isolation`。调度代码 `an` 取调用参数优先、定义次之；`Hn` 再决定本地/远端和同步/后台。未指定 worktree 的本地子 agent 共用父目录；运行时不会自动为子 agent 分配 worktree。内置 web-fetch agent 会忽略隔离请求。证据：`sdk-tools.d.ts:750–786`；二进制偏移 `183916662` 起的 `an`、`Hn`、`go`。
+
+调用时是否隔离由模型决定，引导来自提示。常驻的工具说明只描述参数和结果：worktree 无改动时自动清理，否则返回路径与分支。何时该隔离的指导受 GrowthBook 开关 `tengu_twinkling_boole` 控制（`rNe()`，缺省 `false`），并要求当前目录在 Git 仓库内。开启后，工具说明多一句：两个以上会写同一仓库的 agent，每个都设 `isolation: "worktree"`。派发时 `b8r` 还会检查：新 agent 未指定隔离、可写（工具含 Edit/Write/NotebookEdit）、与父 agent 同目录，且任务注册表里已有同目录的可写 agent 在运行。条件成立时，子 agent 收到“只改任务需要的文件、改前重读、不回滚别人的改动”，父 agent 在后台启动结果里收到“并行写代码的 agent 应逐个设 `isolation: "worktree"`”。本机 `~/.claude.json` 缓存的开关里没有这一项，因此在这台机器上很可能未开启。证据：偏移 `180365097` 的 `rNe`、`180364557` 与 `180364796` 的两段提示、`180365302` 的 `b8r`、`180366332` 的工具说明句；调用点 `183942253`（注入子 agent）与 `183957310`（附到父 agent 结果）。
 
 这项决定保留了轻量、共享目录的调用方式；代价是调用者须识别写入冲突。`go` 对请求隔离但无法建立 Git worktree、也没有 `WorktreeCreate` hook 的情况报错，不以共享目录静默降级。插件可在 `agent.spawn` 时介入，但重写仍受权限检查；worktree 隔离与显式 `cwd` 冲突时会拒绝。证据：二进制偏移 `183916662–183952474`。
 

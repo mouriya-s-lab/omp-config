@@ -193,8 +193,9 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
   `fetch.enabled: false`, `browser.enabled: false`).
 - `agent/settings.json` — minimal legacy extension path: `{"extensions": ["~/.claude"]}`.
 - `agent/APPEND_SYSTEM.md` — global system-prompt appendix (orchestration stance,
-  agent tiers, tool policy).
-- `agent/config-light.yml` — declarative light-mode config overlay: disables seven
+  agent tiers, shared-checkout vs `isolated: true` rules, tool policy). Task children
+  never receive it, so rules they need are repeated in the `task:*` definitions.
+- `agent/config-light.yml` — declarative light-mode config overlay: disables eight
   optional behavior extensions while retaining the three core extensions and four
   compatibility/runtime fixes described in `README.md`.
 - `agent/APPEND_SYSTEM_LIGHT.md` — short system-prompt appendix used only by

@@ -40,7 +40,7 @@
 
 POSIX/macOS/Linux 原子安装为可执行的 `omp-light`，入口使用 `#!/usr/bin/env bun` shebang；bash、zsh、fish 和 Unix `pwsh` 使用同一个 shebang 入口，不依赖 Bash 专用脚本。Windows 原子安装为同目录的 `omp-light.ts` 与最小 `omp-light.cmd`；Windows PowerShell 使用生成的 `.cmd` shim。
 
-入口从 `~/.omp/agent` 读取 `config-light.yml` 和 `APPEND_SYSTEM_LIGHT.md`，并只为本次进程使用短提示替换完整提示，通过配置覆盖禁用本仓库 `agent/extensions/` 下恰好 7 个可选行为扩展：`ctx-post-compact-hint.ts`、`ctx-tasklog.ts`、`ctx-tool.ts`、`doc-polish.ts`、`lang-nag.ts`、`tool-policy-nag.ts`、`watchdog-agent.ts`。核心扩展 `bro.ts`、`commandcode-usage.ts`、`repo-rules.ts` 仍保持加载；以下 4 个兼容性/运行时修复也保持加载：`commandcode-model-spec.ts`、`unified-exec-bun-pty.ts`、`v2-compaction-timeout.ts`、`xai-oauth-cost-ticks.ts`。这些是本次进程的覆盖，不会修改扩展文件。
+入口从 `~/.omp/agent` 读取 `config-light.yml` 和 `APPEND_SYSTEM_LIGHT.md`，并只为本次进程使用短提示替换完整提示，通过配置覆盖禁用本仓库 `agent/extensions/` 下恰好 8 个可选行为扩展：`ctx-post-compact-hint.ts`、`ctx-tasklog.ts`、`ctx-tool.ts`、`doc-polish.ts`、`isolation-nudge.ts`、`lang-nag.ts`、`tool-policy-nag.ts`、`watchdog-agent.ts`。核心扩展 `bro.ts`、`commandcode-usage.ts`、`repo-rules.ts` 仍保持加载；以下 4 个兼容性/运行时修复也保持加载：`commandcode-model-spec.ts`、`unified-exec-bun-pty.ts`、`v2-compaction-timeout.ts`、`xai-oauth-cost-ticks.ts`。这些是本次进程的覆盖，不会修改扩展文件。
 
 其余能力和设置保持不变：OMP 默认配置、已安装插件、tools、`AGENTS/context`、`rules`、`skills`，以及 `model`/`thinking`/`profile`/`auth`/`session` 设置均保留。`omp-light` 后面的 CLI 参数会原样转发给 `omp`，后置参数可以覆盖 launcher 先设置的同名参数。
 
@@ -77,6 +77,8 @@ Claude Code 2.1.280 的 subagent worktree 实现分析见 [`docs/claude-code-sub
 | 讨论 | `discuss:divergent` | 只读发散视角，寻找问题边界外的替代方案及其代价。 |
 | 讨论 | `discuss:steady` | 只读保守视角，检查风险、隐藏假设、遗漏状态和简单方案。 |
 | 指导 | `mentor:default` | 无工具的持续导师，负责调查前审计划、调查后核对证据和遗漏。 |
+
+并行写入的隔离由派发方逐次决定，不绑定在 agent 定义上。不带 `isolated: true` 的 `task:*` 在派发方的工作目录里运行；同一仓库同时有两个以上写入者（同批派出，或前一个写入者仍在运行）时，每个写入者都设 `isolated: true`，只做调查的保持共享，结束后仍能用 `hub` 续聊。隔离 worker 的派工单里写仓库相对路径：OMP 的隔离只靠提示约束，派工单里指向派发方 checkout 的绝对路径会让 worker 的命令跑回派发方目录。隔离不替代文件所有权划分，重叠改动只会变成应用失败的 patch。常驻规则写在 `APPEND_SYSTEM.md` 和四个 `task:*` 定义里（子 agent 收不到 `APPEND_SYSTEM.md`）；模型忘了隔离时，`isolation-nudge.ts` 在派发那一刻拦截一次作为提醒。
 
 `task` 和 `sonic` 不属于常规 tier，也不是 `agent/agents/` 中的定义；OMP 的 Vibe 模式把第一层 subagent 派发写死为这两个固定内置 subagent。因此它们只作为 Vibe 首层的特殊模型覆盖保留，常规任务不按它们选模型。
 
@@ -174,6 +176,10 @@ compact 完成后调用 `ctx-tool.ts` 导出的 `renderCtxListText` 与 `renderC
 ### `tool-policy-nag.ts`
 
 监听 `bash`/`bash_bg` 中用 `cat`、`sed`、`head`、`tail` 等命令读取文件的行为。前三次只记录状态，超过阈值后发送一次 aside 提示并暂停检测，直到 compaction 或会话边界；状态写入 session custom entry，不拦截命令。
+
+### `isolation-nudge.ts`
+
+某次 `task` 调用会让两个以上可写 agent（`task:*`、省略 `agent` 的项、`m1` 这类标记模型 agent）不带隔离地共用当前工作目录时——同一批里有多个，或本会话先前派出的共享写入者仍在运行——扩展在 `tool_call` 阶段拦下这次调用，拦截原因提醒：写入者带 `isolated: true` 重新派发，只做调查的项显式写 `isolated: false`。拦截就是提醒，按派工单 prompt 计：每项的 `task` 文本取 sha256，只有没提醒过的 prompt 会触发；模型原样再派同一批 prompt 就放行，换了新 prompt 会再触发一次。记录按会话保存在内存里，不持久化。它不替模型设置 `isolated`；显式写了 `isolated: false` 的项视为有意共享，不触发拦截；`task` 的 schema 里没有 `isolated`（隔离未启用或处于 plan mode）时也不拦截。“仍在运行”取自本会话拥有的 async job 快照；eval `agent()` / `workpool()` 派出的 agent 不计入。扩展也随 subagent 会话加载，各会话分别记录；处理出错时只记录 warning，`task` 按模型原样执行。
 
 ### `commandcode-usage.ts`
 
