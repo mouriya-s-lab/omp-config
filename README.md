@@ -26,7 +26,7 @@
 /update-omp
 ```
 
-方向严格单向（仓库 `agent/` → 本机 `~/.omp/agent`，会写本机）。常规只更新 `agents/`、`extensions/*.ts`、`APPEND_SYSTEM.md`、`thinking-translator.json`、轻量模式三项资产（`config-light.yml`、`APPEND_SYSTEM_LIGHT.md`、`omp-light.ts`）和插件；`config.yml`、`settings.json` 等其余项默认不动，只有 `init` 参数才逐项确认后迁移。`thinking-translator.json` 是 `~/.omp/agent` 下的常规托管文件（供 `omp-thinking-translator` 读取），有差异直接覆盖，覆盖前后用 `bun -e` 以 `JSON.parse` 确认可解析；这与 `doc-polish.json`（本机相关、本机已存在就不动，否则询问用户）、`commandcode-models.json`（本机生成、不迁移）不同。更新同时把轻量入口安装到 PATH 上已解析的 `omp` 可执行文件同目录：POSIX/macOS/Linux 为 `omp-light`，Windows 为 `omp-light.ts` 加 `omp-light.cmd`。扩展需要初始化或写配置文件时（如 `doc-polish.json`）若本机已存在就不动，否则询问用户。`check` 参数只报告差异、不写本机：
+方向严格单向（仓库 `agent/` → 本机 `~/.omp/agent`，会写本机）。更新 `config.yml`、`settings.json`、`agents/`、`extensions/*.ts`、`extensions/lang-nag.json`、`APPEND_SYSTEM.md`、`thinking-translator.json`、轻量模式三项资产（`config-light.yml`、`APPEND_SYSTEM_LIGHT.md`、`omp-light.ts`）和插件。agent 定义和 `config.yml` 里的模型绑定一起更新，避免 agent 名和模型对不上。本机已有的结构化配置（`config.yml`、`settings.json`、各 JSON）只按字段改有差异的行，不整文件覆盖；`config.yml` 里 `/sync-omp-config` 列出的本机字段（如 `modelRoles`、`theme`）不动。`doc-polish.json`（本机相关、本机已存在就不动，否则询问用户）和 `commandcode-models.json`（本机生成、不迁移）不随更新迁移。更新同时把轻量入口安装到 PATH 上已解析的 `omp` 可执行文件同目录：POSIX/macOS/Linux 为 `omp-light`，Windows 为 `omp-light.ts` 加 `omp-light.cmd`。`check` 参数只报告差异、不写本机：
 
 ```
 /update-omp check

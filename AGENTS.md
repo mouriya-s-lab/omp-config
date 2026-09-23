@@ -42,7 +42,7 @@ flowchart LR
   end
   O["PATH directory beside resolved omp"]
   M["omp-light (POSIX) / omp-light.ts + .cmd (Windows)"]
-  repo -->|"/update-omp [init]"| machine
+  repo -->|"/update-omp"| machine
   repo -->|"/update-omp: install entry"| O
   O --> M
   machine -->|"/sync-omp-config (read-only src)"| repo
@@ -62,12 +62,15 @@ flowchart LR
   `thinking-translator.json` but excludes installed PATH launchers.
   `/update-omp` writes the machine and installs `omp-light` beside the resolved
   `omp` executable (`.omp/commands/*.md`).
-- **Agent-root `thinking-translator.json` is managed in both directions** as a
-  regular (non-`init`) item: `/sync-omp-config` diffs the live file into
-  `agent/thinking-translator.json` (machine → repo); `/update-omp` diffs the
-  snapshot back onto the machine (repo → machine, `~/.omp/agent`). Both sides
-  validate it with `bun -e` + `JSON.parse`.
-  It is **not** like `doc-polish.json` (machine-local, prompt-overridable) or
+- **Structured configs are managed in both directions, field by field.**
+  `config.yml`, `settings.json`, the agent-root `thinking-translator.json`, and
+  `extensions/lang-nag.json` are regular items of both commands: each side reads
+  both files, diffs fields, and edits only the differing lines — never a
+  whole-file overwrite or re-serialization. `config.yml`'s machine-local fields
+  (listed in `.omp/commands/sync-omp-config.md`) are never carried either way.
+  `/update-omp` updates agent definitions and their `config.yml` model bindings
+  together. Both sides validate with `bun -e` + `Bun.YAML.parse` / `JSON.parse`.
+  This is **not** like `doc-polish.json` (machine-local, prompt-overridable) or
   `commandcode-models.json` (machine-generated, never migrated).
 - **Plugins are runtime state**, installed via `omp install` into
   `~/.omp/plugins/` and never copied into this repo (`README.md`).
@@ -77,7 +80,7 @@ flowchart LR
 | Path | Purpose |
 | --- | --- |
 | `agent/` | Managed harness config. Only listed items are portable; the whole dir is **not**. |
-| `agent/extensions/` | Local TypeScript extensions (the code core). 15 `.ts` (incl. `bro.ts`, the built-in-AI rewrite of the former `pi-bro` plugin, and `watchdog-agent.ts`) + `doc-polish.json`/`lang-nag.json` sidecars (`doc-polish.json` is machine-local/prompt-overridable — see Important Files). |
+| `agent/extensions/` | Local TypeScript extensions (the code core). 15 `.ts` (incl. `bro.ts`, the built-in-AI rewrite of the former `pi-bro` plugin, and `watchdog-agent.ts`) + `doc-polish.json`/`lang-nag.json` sidecars (`lang-nag.json` is synced both ways; `doc-polish.json` is machine-local/prompt-overridable — see Important Files). |
 | `agent/agents/` | Custom subagent definitions (`*.md`) + `README.txt` authoring pitfalls. |
 | `agent/thinking-translator.json` | Agent-root translator config for `omp-thinking-translator`. Portable regular item: `/sync-omp-config` carries machine → repo, `/update-omp` carries repo → machine. |
 | `.omp/commands/` | Project-level slash-command definitions run from repo root. |
@@ -89,7 +92,7 @@ flowchart LR
 Slash commands run inside `omp` started at the repo root:
 
 ```
-/update-omp [check|init]      # repo -> machine (writes); installs omp-light beside PATH's resolved omp. init also migrates config.yml/settings.json per-item
+/update-omp [check]           # repo -> machine (writes); field-level edits for config.yml/settings.json/JSON; installs omp-light beside PATH's resolved omp
 /sync-omp-config [check]      # machine -> repo (repo write only); syncs light assets, never installed PATH entries. Full mode commits+pushes
 /migrate-omp-keys <target>    # SSH-copy auth_credentials to a remote omp host (not a snapshot path)
 ```
@@ -202,7 +205,7 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
   `omp`; generated entries are not part of the repo copy set.
 - `agent/thinking-translator.json` — agent-root config read by
   `omp-thinking-translator` at `~/.omp/agent`. Managed regular item in both
-  directions (diff-then-copy; validate with `bun -e` + `JSON.parse`). Unlike
+  directions (field-level diff and edit; validate with `bun -e` + `JSON.parse`). Unlike
   `agent/extensions/doc-polish.json` below, it is portable, not machine-local.
 - `agent/extensions/doc-polish.json` — active config for `doc-polish.ts`
   (`splitModel`, `polishModel`, `concurrency`; `checkModel` optional, omitted

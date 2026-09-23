@@ -5,22 +5,28 @@ description: 用本仓库快照更新本机 OMP 配置（repo → 本机）
 把仓库 `agent/` 单向写入本机 `~/.omp/agent`（先展开为绝对路径），与 `/sync-omp-config` 方向相反。不使用 subagent，直接执行。
 
 `$ARGUMENTS`：
-- 为空：常规更新。
-- `check`：只读，逐项比对并报告差异，包括 light 已安装入口、PATH shadowing 和 `./plugin-audit.sh` 的结论；不 mkdir、复制、chmod、rename、装卸插件，不改 PATH 或 shell 配置。
-- `init`：常规更新之外，再覆盖 `config.yml` 和 `settings.json`。会盖掉本机特有值，逐项先向用户确认。
+- 为空：更新下表全部项。
+- `check`：只读，逐项比对并报告差异，包括 light 已安装入口、PATH shadowing 和 `./plugin-audit.sh` 的结论；不 mkdir、复制、chmod、rename、编辑、装卸插件，不改 PATH 或 shell 配置。
 
-## 常规更新项
+结构化配置（`config.yml`、`settings.json`、各 JSON）本机已有时，先 `read` 两边、比出有差异的字段，再用 `edit` 只改这些行；不整文件覆盖，不重新序列化。
+
+## 更新项
 
 | 仓库 | 本机 | 规则 |
 | --- | --- | --- |
+| `agent/config.yml` | 同名 | 只改有差异的字段；`/sync-omp-config` 列出的本机字段不动 |
+| `agent/settings.json` | 同名 | 只改有差异的字段 |
 | `agent/APPEND_SYSTEM.md` | 同名 | 直接覆盖 |
-| `agent/thinking-translator.json` | 同名 | 有差异才覆盖 |
+| `agent/thinking-translator.json` | 同名 | 只改有差异的字段 |
 | `agent/agents/` | `agents/` | `diff -rq` 确认范围后覆盖 |
 | `agent/extensions/*.ts` | `extensions/` | 同名覆盖、缺的补齐，见「扩展」 |
+| `agent/extensions/lang-nag.json` | 同名 | 只改有差异的字段 |
 | `agent/config-light.yml`、`agent/APPEND_SYSTEM_LIGHT.md`、`agent/omp-light.ts` | 同名 | 三件整体更新并安装入口，见「Light 启动器」 |
 | `install-plugins.sh` 的插件列表 | 已装插件 | 见「插件」 |
 
-数据库、WAL、会话、缓存、日志、`models.yml`、`commandcode-models.json`、`last-changelog-version` 在任何模式下都不迁。
+agent 定义和 `config.yml` 里的模型绑定必须一起更新；只更新一边会让 agent 名和模型对不上。
+
+数据库、WAL、会话、缓存、日志、`models.yml`、`commandcode-models.json`、`last-changelog-version` 都不迁。
 
 ## 扩展
 
@@ -51,7 +57,7 @@ description: 用本仓库快照更新本机 OMP 配置（repo → 本机）
 
 ## 校验与报告
 
-- 复制的文件与仓库 `cmp` 一致；安装入口检查内容、权限和解析路径。
-- 动过的 YAML/JSON 两端都要能解析：`config-light.yml`、`init` 时的 `config.yml` 用 `Bun.YAML.parse`；`thinking-translator.json`、`init` 时的 `settings.json` 用 `JSON.parse`。
+- 复制的文件与仓库 `cmp` 一致；编辑过的结构化配置，除本机字段外与仓库逐字段一致；安装入口检查内容、权限和解析路径。
+- 动过的 YAML/JSON 两端都要能解析：`config.yml`、`config-light.yml` 用 `Bun.YAML.parse`，`settings.json`、`thinking-translator.json`、`lang-nag.json` 用 `JSON.parse`。
 - 不打印凭据，不把明文凭据写进本机。
 - 报告改了哪些文件、装卸了哪些插件、哪些项因等待确认被跳过，并提醒重启 OMP：APPEND_SYSTEM、扩展、插件在下次启动时加载。
