@@ -51,9 +51,18 @@ const EVAL_PROGRAMS: Record<string, true> = {
     python3: true,
     ruby: true,
 };
+/**
+ * Privilege elevation and remote execution: the command runs as another user or
+ * on another host, where the built-in tools cannot reach, so it is never a hit.
+ */
+const EXEMPT_PROGRAMS: Record<string, true> = {
+    sudo: true,
+    doas: true,
+    su: true,
+    ssh: true,
+};
 /** Prefixes that delegate to the real program in the same command position. */
 const WRAPPER_PROGRAMS: Record<string, true> = {
-    sudo: true,
     command: true,
     env: true,
     time: true,
@@ -553,6 +562,7 @@ function analyzeSimpleCommand(tokens: readonly CommandToken[]): ShellViolation[]
     const head = tokens[index];
     if (head === undefined || head.kind !== 'word') return [];
     const program = basename(head.text);
+    if (EXEMPT_PROGRAMS[program] === true) return [];
     const args: string[] = [];
     const readInputs: string[] = [];
     const outputRedirects: OutputRedirect[] = [];

@@ -32,7 +32,7 @@ The bundled `task` sits in `task.disabledAgents` in config.yml (along with `scou
 `sonic`, `reviewer`, `security-reviewer`), so "*" plus an omitted field is a hard
 preflight failure. An explicit list closes that trap for free — but choose the first
 entry deliberately, because it is the silent default. The files here list
-`task:mid` first.
+`task:low` first.
 
 
 3. Names in `task.disabledAgents` fail even when allowlisted
@@ -52,7 +52,7 @@ Consequence: a worker can fan out one level, but whatever it hands out must be
 directly executable, never "decompose this further". A plan that needs three live
 levels has to start one level shallower.
 
-Observed: a `task:low` child of a `task:mid` worker reported its tool list
+Observed: a `task:free` child of a `task:low` worker reported its tool list
 as read, bash, edit, eval, glob, grep, hub, web_search, write, yield — no `task`.
 
 

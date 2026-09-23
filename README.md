@@ -1,6 +1,6 @@
 # omp-config
 
-这不是完整的 `~/.omp` 备份。仓库只保存可审查的配置和安装入口。
+这不是完整的 `~/.omp` 备份。仓库保存可审查的配置和安装入口，也保存不参与配置迁移的对照研究文档。
 
 ## 从本机同步
 
@@ -60,24 +60,27 @@ POSIX/macOS/Linux 原子安装为可执行的 `omp-light`，入口使用 `#!/usr
 
 ## Subagent 配置设计
 
-OMP 把 subagent 分成三类：`task:*` 负责执行，`discuss:*` 只读讨论，`mentor:default` 只读指导。`agent/APPEND_SYSTEM.md` 定义全局编排流程和能力边界，`agent/agents/` 的定义文件补充每个 agent 的职责；模型与推理强度由 `agent/config.yml` 单独绑定。职责与模型分离，换模型不会改变 agent 的能力边界。
+OMP 把 subagent 分成三类：`task:*` 负责执行，`discuss:*` 只读讨论，`mentor:default` 只读指导。harness 会把 `agent/APPEND_SYSTEM.md` 和各 agent 定义的 `description` 都注入主 agent，两者分工、内容不重复：`description` 说明每个 agent 本身（模型档次、成本、可信度、职责），`APPEND_SYSTEM.md` 只写全局编排流程和各类 agent 的配合用法；定义文件正文是 subagent 自己的角色提示。模型与推理强度由 `agent/config.yml` 单独绑定，换模型不改变 agent 的职责边界，但要同步 `description` 里的模型档次和成本。
 
-当前定义的职责分层与共同拆分规则如下。所有 `task:*` 都是通用执行 agent，能处理相同范围的调查、设计、实现、调试、拆分和验证；tier 只表示模型成本与单次结果的预期可信度，不表示任务难度、歧义程度、设计权限或适用场景。
+Claude Code 2.1.280 的 subagent worktree 实现分析见 [`docs/claude-code-subagent-worktree-design.md`](docs/claude-code-subagent-worktree-design.md)；它是对照研究，不属于 OMP 配置复制集。
 
-所有 `task:*` 都由当前切片 owner 在实现前作本地 keep-or-split 决定。三项独立性检验是：每个单元有独立验收标准、可不依赖其他单元输出启动、文件/状态所有权不重叠；至少两个有界单元同时满足时，必须一次并行派发，否则把耦合或依赖工作留在本地。递归上限的子代理只能接收可直接执行的叶子。
+当前定义的职责分层与共同拆分规则如下。所有 `task:*` 都是 Opus 级别模型上的通用执行 agent，能处理相同范围的调查、设计、实现、调试、拆分和验证；tier 只表示模型成本与单次结果的预期可信度，不表示任务难度、歧义程度、设计权限或适用场景。
+
+核心代码、小型变动和文档设计永远不交给 `task:*`，由当前 owner 自己写：核心代码承载设计（领域类型与状态模型、改动的核心逻辑、其他切片依赖的接口），小型变动写派工单不比直接改省事（按整件工作判断，不按委派工作切出的单元判断），文档设计需要的意图和品味留在 owner 与用户手里。其余工作尽量切到最小、仍有独立验收标准的单元，一次并行派出：小单元完成快、失败代价低、易验证，整批的等待时间取决于最慢的小单元，而不是一个大 worker；`task:free` 容量几乎无限，在 harness 并发上限以内，并行数量不是约束。三项独立性检验是：每个单元有独立验收标准、可不依赖其他单元输出启动、文件/状态所有权不重叠；单元只因接口或文件边界未定而不满足后两项时，先把边界定下来再并行；满足的单元必须一次并行派发，确实拆不开的才作为一个切片，主 agent 交给单个 worker，worker 自己执行。worker 可再派一层，孙代处于递归上限，只能接收可直接执行的叶子。
 
 | 类型 | 名称 | 设计职责 |
 | --- | --- | --- |
-| 执行 | `task:high` | 通用最高成本 tier；任务范围与 mid/low 相同，用于错误代价高、证据难以取得或便宜模型相互冲突，购买更强的预期判断力与可信度。 |
-| 执行 | `task:mid` | 通用中等成本 tier，也是 low 结果的必需验证层；任务范围与 high/low 相同，独立复现关键检查、用实际产物和 runtime 证据核验 low 的结论并裁决冲突。 |
-| 执行 | `task:low` | 通用零成本 tier，几乎可无限并发；任务范围与 mid/high 相同，但单个结果低可信，只负责产出候选工作和证据，不能相互验证，关键结果必须由 `task:mid` 独立验证。 |
+| 执行 | `task:high` | 通用顶级 tier，模型为 Anthropic Claude Opus 5.5，地球上最好的模型，基本完美无缺；综合输入、输出、缓存等各类 token，每 1M token 约 0.45 USD；任务范围与其他 tier 相同，用于结果必须一次做对，或包括 `task:mid` 在内的便宜 tier 都无法裁决的情况。 |
+| 执行 | `task:mid` | 通用中等成本 tier，综合输入、输出、缓存等各类 token，每 1M token 约 0.3 USD，大约与 GLM 5.2 相当；任务范围与其他 tier 相同，用于错误代价高、证据难以取得或便宜模型相互冲突，购买比 low/free 更强的预期判断力与可信度。 |
+| 执行 | `task:low` | 通用低成本 tier，综合输入、输出、缓存等各类 token，每 1M token 约 0.01 USD，比 DeepSeek 任何版本都便宜；free 结果交给 subagent 验证时由它担任验证者，任务范围与其他 tier 相同，独立复现关键检查、用实际产物和 runtime 证据核验 free 的结论并裁决冲突。 |
+| 执行 | `task:free` | 通用零成本 tier，几乎可无限并发；任务范围与其他 tier 相同，但单个结果低可信，只负责产出候选工作和证据，不能相互验证；关键结果必须经独立验证：简单场景由主 agent 自己验证，大片交付物交给不参与产出的 `task:low` 及以上 tier 验证。 |
 | 讨论 | `discuss:divergent` | 只读发散视角，寻找问题边界外的替代方案及其代价。 |
 | 讨论 | `discuss:steady` | 只读保守视角，检查风险、隐藏假设、遗漏状态和简单方案。 |
 | 指导 | `mentor:default` | 无工具的持续导师，负责调查前审计划、调查后核对证据和遗漏。 |
 
 `task` 和 `sonic` 不属于常规 tier，也不是 `agent/agents/` 中的定义；OMP 的 Vibe 模式把第一层 subagent 派发写死为这两个固定内置 subagent。因此它们只作为 Vibe 首层的特殊模型覆盖保留，常规任务不按它们选模型。
 
-实际模型绑定、运行开关和禁用入口只保留在 `agent/config.yml`，不在 README 重复维护。调整职责边界时改 `APPEND_SYSTEM.md` 或对应定义；调整模型时改配置中的模型绑定。
+实际模型绑定、运行开关和禁用入口只保留在 `agent/config.yml`，不在 README 重复维护。调整配合用法时改 `APPEND_SYSTEM.md`，调整某个 agent 本身的职责时改它的定义；调整模型时改配置中的模型绑定，并同步该 agent `description` 与上表中的模型档次和成本。
 
 ## 直接迁移
 
@@ -214,7 +217,7 @@ compact 完成后调用 `ctx-tool.ts` 导出的 `renderCtxListText` 与 `renderC
 
 文件名为 `WATCHDOG-<标签>.md`，头部用 Claude `rule.md` 式 frontmatter：
 
-- `target`（必填）：`main` | 子 agent 名（如 `task:mid`、`discuss:divergent`） | `*` | `subagents` | 逗号分隔列表。决定这份 watchdog 监视谁，正文只投给匹配的目标。
+- `target`（必填）：`main` | 子 agent 名（如 `task:low`、`discuss:divergent`） | `*` | `subagents` | 逗号分隔列表。决定这份 watchdog 监视谁，正文只投给匹配的目标。
 - `model`（可选）：reviewer 模型，支持 `:effort` 后缀；缺省用 `advisor` 角色（`@advisor`），再退到当前会话模型。
 - `tools`（可选）：reviewer 可用的内置工具，默认只读 `read`/`grep`/`glob`；非白名单名（read/grep/glob/ast_grep/web_search/edit/write/bash/eval）被丢弃。
 - `name` / `enabled`（默认 `true`） / `delivery`（`aside`|`steer`|`nextTurn`|`followUp`，默认 `aside`） / `maxPerContext`（默认 `6`）。

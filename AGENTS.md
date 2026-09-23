@@ -169,7 +169,7 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
 - YAML frontmatter: `name`, `description`, `spawns` (comma list). **No `model`
   field** — model binding lives in `config.yml`.
 - Prefer an explicit `spawns` allowlist over `"*"`; the **first** listed name is
-  the silent default for an omitted `agent`, so files list `task:mid` first
+  the silent default for an omitted `agent`, so files list `task:low` first
   (`agent/agents/README.txt:24-35`).
 - Read `agent/agents/README.txt` before editing — it documents hard traps:
   `task.disabledAgents` (`task`, `scout`, `sonic`, `reviewer`,
@@ -248,7 +248,7 @@ three light assets alone does not make `omp-light` resolvable.
 - The installed `omp-light` entry is not stored in `~/.omp/agent`: it is
   placed beside the resolved `omp` executable so the existing `PATH` finds it.
 - **Restart required:** `APPEND_SYSTEM.md`, extensions, and plugins take effect on
-  the next `omp` start (`.omp/commands/update-omp.md:89-96`); agent `*.md` edits
+  the next `omp` start (`.omp/commands/update-omp.md:57`); agent `*.md` edits
   apply on next spawn without restart.
 - **Never commit** (per `.gitignore`): `agent/*.db*`, `*.lock`, `config.yml.lock`,
   `models.yml*`, `commandcode-models.json`, `sessions/`, `terminal-sessions/`,

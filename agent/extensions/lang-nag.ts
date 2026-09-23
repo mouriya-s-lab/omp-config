@@ -15,18 +15,17 @@ import { join } from "node:path";
 // instruction (e.g. "说中文") to the front of the NEXT user message so the model
 // self-corrects on its own next turn.
 //
-// What gets classified. Only the assistant's REPLY BODY — `type: "text"`
-// content blocks / `text_delta` stream events. Thinking (`thinking`/
-// `thinking_delta`) and tool calls (`toolCall`) are never treated as reply
-// text. From that body we take the LAST paragraph (blank-line separated) and
+// What gets classified. Only the assistant's REPLY BODY — the `type: "text"`
+// content blocks of the messages `agent_end` delivers. Thinking and tool calls
+// (`toolCall`) are never treated as reply text. From that body we take the LAST
+// paragraph (blank-line separated) and
 // hand the classifier the first 200 code points of it — the natural-language
 // sign-off, not the whole turn.
 //
-// Interruption. The reply is captured live from the stream, so when the user
-// interrupts a partial reply and submits the next message before the agent loop
-// settles, that partial last-paragraph is still classified (the `input`
-// fallback below); the normal path arms detection at `agent_end`. A per-reply
-// `replyHandled` flag keeps the two paths from double-firing.
+// Cancellation. Detection starts at `agent_end` and overlaps with the user
+// reading and typing. The next genuine user message only takes a verdict that
+// has already settled; if detection is still running when the message is sent,
+// the detector session is aborted and the message goes out unchanged.
 //
 // Detection uses a dedicated, in-memory `createAgentSession` (doc-polish's
 // runner shape): the configured model, thinking OFF, NO tools, no MCP/LSP/
@@ -174,7 +173,12 @@ function interpretVerdict(answer: string): boolean | null {
 	return null;
 }
 
-async function isTargetLanguage(ctx: ExtensionContext, model: Model, prompt: string): Promise<boolean | null> {
+async function isTargetLanguage(
+	ctx: ExtensionContext,
+	model: Model,
+	prompt: string,
+	signal: AbortSignal,
+): Promise<boolean | null> {
 	const { session } = await createAgentSession({
 		cwd: ctx.cwd,
 		modelRegistry: ctx.modelRegistry,
@@ -188,6 +192,14 @@ async function isTargetLanguage(ctx: ExtensionContext, model: Model, prompt: str
 		disableExtensionDiscovery: true,
 		agentId: "lang-nag-detector",
 	});
+	if (signal.aborted) {
+		await session.dispose();
+		return null;
+	}
+	const onAbort = (): void => {
+		void session.abort();
+	};
+	signal.addEventListener("abort", onAbort, { once: true });
 	let deltas = "";
 	let finalMessages: unknown;
 	const unsubscribe = session.subscribe((event: unknown) => {
@@ -205,9 +217,11 @@ async function isTargetLanguage(ctx: ExtensionContext, model: Model, prompt: str
 	try {
 		await session.prompt(prompt);
 	} finally {
+		signal.removeEventListener("abort", onAbort);
 		unsubscribe();
 		await session.dispose();
 	}
+	if (signal.aborted) return null;
 	// A provider failure lands as an assistant turn with stopReason "error"; treat
 	// it as undetermined rather than a mismatch.
 	const msgs = Array.isArray(finalMessages) ? finalMessages : [];
@@ -221,12 +235,13 @@ async function isTargetLanguage(ctx: ExtensionContext, model: Model, prompt: str
 }
 
 // Resolves to the instruction to prepend, or null (in-target / undetermined /
-// misconfigured). Never rejects, so it is safe to hold as a floating promise.
+// misconfigured / aborted). Never rejects, so it is safe to hold as a floating promise.
 async function detectInstruction(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,
 	cfg: LangNagConfig,
 	sample: string,
+	signal: AbortSignal,
 ): Promise<string | null> {
 	const model = resolveModel(ctx, cfg.model);
 	if (!model) {
@@ -240,9 +255,10 @@ async function detectInstruction(
 		`Reply with exactly one word — "yes" or "no" — and nothing else.\n\n` +
 		`TEXT:\n"""\n${sample}\n"""`;
 	try {
-		const inTarget = await isTargetLanguage(ctx, model, prompt);
+		const inTarget = await isTargetLanguage(ctx, model, prompt, signal);
 		return inTarget === false ? cfg.instruction : null;
 	} catch (error) {
+		if (signal.aborted) return null;
 		pi.logger?.warn?.("lang-nag: detection failed", { error: String(error) });
 		return null;
 	}
@@ -250,27 +266,29 @@ async function detectInstruction(
 
 // --- extension registration -------------------------------------------------
 
+// Detection for the latest terminal reply: nothing armed, still running (abortable),
+// or settled with the instruction to prepend (null = no nag).
+type Detection =
+	| { readonly kind: "idle" }
+	| { readonly kind: "running"; readonly controller: AbortController }
+	| { readonly kind: "settled"; readonly instruction: string | null };
+
+const IDLE: Detection = { kind: "idle" };
+
 export default function langNag(pi: ExtensionAPI): void {
 	let config: LangNagConfig | null = null;
 	let mainSession = false;
-	// Live text of the assistant message currently streaming (body only). Reset
-	// at each assistant message start; read by the interruption fallback.
-	let streamBuf = "";
-	// The current reply already had detection kicked off (either armed at
-	// agent_end or consumed by an interrupting input). Reset per assistant reply.
-	let replyHandled = false;
-	// Detection kicked off at agent_end, awaited/consumed by the next real input.
-	let pending: Promise<string | null> | null = null;
+	let detection: Detection = IDLE;
 
-	const resetTurnState = (): void => {
-		streamBuf = "";
-		replyHandled = false;
-		pending = null;
+	// Drops the current detection, aborting it if it is still running.
+	const cancelDetection = (): void => {
+		if (detection.kind === "running") detection.controller.abort();
+		detection = IDLE;
 	};
 
 	pi.on("session_start", (_event, ctx) => {
 		mainSession = isMainSession(ctx);
-		resetTurnState();
+		cancelDetection();
 		if (!mainSession) return;
 		config = loadConfig(ctx.cwd);
 		if (config) {
@@ -282,88 +300,56 @@ export default function langNag(pi: ExtensionAPI): void {
 	// Switching to another session file re-reads cwd-local config and identity.
 	pi.on("session_switch", (_event, ctx) => {
 		mainSession = isMainSession(ctx);
-		resetTurnState();
+		cancelDetection();
 		config = mainSession ? loadConfig(ctx.cwd) : null;
 	});
-	// Boundaries that swap the working context invalidate any in-flight reply/verdict.
+	// Boundaries that swap the working context invalidate any in-flight verdict.
 	pi.on("session_branch", (_event, ctx) => {
-		if (isMainSession(ctx)) resetTurnState();
+		if (isMainSession(ctx)) cancelDetection();
 	});
 	pi.on("session_tree", (_event, ctx) => {
-		if (isMainSession(ctx)) resetTurnState();
+		if (isMainSession(ctx)) cancelDetection();
 	});
 	pi.on("session_compact", (_event, ctx) => {
-		if (isMainSession(ctx)) resetTurnState();
-	});
-
-	// A new assistant message begins: fresh body buffer, fresh per-reply flag.
-	pi.on("message_start", (event) => {
-		if (!mainSession || config === null) return;
-		if (event.message.role === "assistant") {
-			streamBuf = "";
-			replyHandled = false;
-		}
-	});
-	// Accumulate reply-body deltas only; thinking_delta / toolcall deltas are ignored.
-	pi.on("message_update", (event) => {
-		if (!mainSession || config === null) return;
-		const a = event.assistantMessageEvent;
-		if (a.type === "text_delta") streamBuf += a.delta;
+		if (isMainSession(ctx)) cancelDetection();
 	});
 
 	pi.on("agent_end", (event, ctx) => {
 		if (!mainSession || config === null) return;
 		// An auto-scheduled continuation is not a user-visible terminal reply.
 		if (event.willContinue === true) return;
-		// Already handled by an interrupting input for this reply — clear and skip.
-		if (replyHandled) {
-			replyHandled = false;
-			return;
-		}
+		// A newer terminal reply supersedes any verdict still pending for an older one.
+		cancelDetection();
 		const sample = lastParagraphSample(lastAssistantBody(event.messages));
-		if (sample === "") {
-			pending = null;
-			return;
-		}
-		const cfg = config;
-		replyHandled = true;
-		// Kick detection off now so it overlaps with the user reading/typing; the
-		// input handler awaits whatever this resolves to.
-		pending = detectInstruction(pi, ctx, cfg, sample);
+		if (sample === "") return;
+		const controller = new AbortController();
+		const running: Detection = { kind: "running", controller };
+		detection = running;
+		// Runs while the user reads/types; only a verdict that settles before the
+		// next input is used.
+		void detectInstruction(pi, ctx, config, sample, controller.signal).then(instruction => {
+			if (detection === running) detection = { kind: "settled", instruction };
+		});
 	});
 
-	pi.on("input", async (event, ctx) => {
+	pi.on("input", (event) => {
 		if (!mainSession) return;
 		// Slash-command invocations are harness UI, not natural language — never nag.
-		// Discard any armed verdict: this turn is consumed by the command, and a
-		// stale instruction must not leak into the next genuine user message.
+		// Drop any verdict: this turn is consumed by the command, and a stale
+		// instruction must not leak into the next genuine user message.
 		if (event.text.startsWith("/")) {
-			pending = null;
-			replyHandled = false;
+			cancelDetection();
 			return;
 		}
 		// Only prepend to genuine user turns, never to synthetic injections
 		// (steers/asides from this or other extensions).
 		if (event.source === "extension") return;
 
-		// Normal path: detection was armed at agent_end.
-		if (pending !== null) {
-			const inFlight = pending;
-			pending = null;
-			replyHandled = false;
-			const instruction = await inFlight;
-			if (instruction !== null && instruction !== "") return { text: `${instruction}\n\n${event.text}` };
-			return;
+		const current = detection;
+		cancelDetection();
+		if (current.kind === "settled" && current.instruction !== null && current.instruction !== "") {
+			return { text: `${current.instruction}\n\n${event.text}` };
 		}
-
-		// Interruption path: the user submitted before the reply's agent_end armed
-		// detection. Classify the partial reply captured from the live stream.
-		if (config === null || replyHandled) return;
-		const sample = lastParagraphSample(streamBuf);
-		if (sample === "") return;
-		replyHandled = true;
-		const instruction = await detectInstruction(pi, ctx, config, sample);
-		if (instruction !== null && instruction !== "") return { text: `${instruction}\n\n${event.text}` };
 	});
 }
 

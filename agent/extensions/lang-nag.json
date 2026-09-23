@@ -1,5 +1,5 @@
 {
-  "model": "commandcode/google/gemini-3.7-flash",
+  "model": "openai-codex/gpt-6-luna",
   "language": "中文",
   "instruction": "说中文"
 }
