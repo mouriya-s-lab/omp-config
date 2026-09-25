@@ -13,7 +13,7 @@ import { type ExtensionAPI, type ExtensionContext, z } from '@oh-my-pi/pi-coding
  *
  * "Shared" means spawned without `isolated: true`. Only items that leave
  * `isolated` out count as undecided; an explicit `isolated: false` is a
- * deliberate choice (research-only, hub-continuable) and never triggers the
+ * deliberate choice (research-only, still messageable) and never triggers the
  * block. Earlier shared writers count while their background job is running,
  * found through the caller-owned async job snapshot. Eval `agent()` and
  * `workpool()` spawns are not seen. When the `task` schema has no `isolated`

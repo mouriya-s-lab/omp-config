@@ -64,21 +64,21 @@ OMP 把 subagent 分成三类：`task:*` 负责执行，`discuss:*` 只读讨论
 
 Claude Code 2.1.280 的 subagent worktree 实现分析见 [`docs/claude-code-subagent-worktree-design.md`](docs/claude-code-subagent-worktree-design.md)；它是对照研究，不属于 OMP 配置复制集。
 
-当前定义的职责分层与共同拆分规则如下。所有 `task:*` 都是 Opus 级别模型上的通用执行 agent，能处理相同范围的调查、设计、实现、调试、拆分和验证；tier 只表示模型成本与单次结果的预期可信度，不表示任务难度、歧义程度、设计权限或适用场景。
+当前定义的职责分层与共同拆分规则如下。所有 `task:*` 都是 Opus 级别模型上的通用执行 agent，能处理相同范围的调查、设计、实现、调试、拆分和验证；tier 只表示模型成本与单次结果的预期可信度，按结果需要的可信度与验证代价选择，不按任务难度、歧义程度或设计权限选择。
 
-核心代码、小型变动和文档设计永远不交给 `task:*`，由当前 owner 自己写：核心代码承载设计（领域类型与状态模型、改动的核心逻辑、其他切片依赖的接口），小型变动写派工单不比直接改省事（按整件工作判断，不按委派工作切出的单元判断），文档设计需要的意图和品味留在 owner 与用户手里。其余工作尽量切到最小、仍有独立验收标准的单元，一次并行派出：小单元完成快、失败代价低、易验证，整批的等待时间取决于最慢的小单元，而不是一个大 worker；`task:free` 容量几乎无限，在 harness 并发上限以内，并行数量不是约束。三项独立性检验是：每个单元有独立验收标准、可不依赖其他单元输出启动、文件/状态所有权不重叠；单元只因接口或文件边界未定而不满足后两项时，先把边界定下来再并行；满足的单元必须一次并行派发，确实拆不开的才作为一个切片，主 agent 交给单个 worker，worker 自己执行。worker 可再派一层，孙代处于递归上限，只能接收可直接执行的叶子。
+核心代码、小型变动和文档设计永远不交给 `task:*`，由当前 owner 自己写：核心代码承载设计（领域类型与状态模型、改动的核心逻辑、其他切片依赖的接口），小型变动写派工单不比直接改省事（按整件工作判断，不按委派工作切出的单元判断），文档设计需要的意图和品味留在 owner 与用户手里。其余工作尽量切到最小、仍有独立验收标准的单元，一次并行派出：小单元完成快、失败代价低、易验证，整批的等待时间取决于最慢的小单元，而不是一个大 worker；在 harness 并发上限以内，并行数量不是约束。三项独立性检验是：每个单元有独立验收标准、可不依赖其他单元输出启动、文件/状态所有权不重叠；单元只因接口或文件边界未定而不满足后两项时，先把边界定下来再并行；满足的单元必须一次并行派发，确实拆不开的才作为一个切片，主 agent 交给单个 worker，worker 自己执行。worker 可再派一层，孙代处于递归上限，只能接收可直接执行的叶子。
 
 | 类型 | 名称 | 设计职责 |
 | --- | --- | --- |
 | 执行 | `task:high` | 通用顶级 tier，模型为 Anthropic Claude Opus 5.5，地球上最好的模型，基本完美无缺；综合输入、输出、缓存等各类 token，每 1M token 约 0.45 USD；任务范围与其他 tier 相同，用于结果必须一次做对，或包括 `task:mid` 在内的便宜 tier 都无法裁决的情况。 |
 | 执行 | `task:mid` | 通用中等成本 tier，综合输入、输出、缓存等各类 token，每 1M token 约 0.3 USD，大约与 GLM 5.2 相当；任务范围与其他 tier 相同，用于错误代价高、证据难以取得或便宜模型相互冲突，购买比 low/free 更强的预期判断力与可信度。 |
-| 执行 | `task:low` | 通用低成本 tier，综合输入、输出、缓存等各类 token，每 1M token 约 0.01 USD，比 DeepSeek 任何版本都便宜；free 结果交给 subagent 验证时由它担任验证者，任务范围与其他 tier 相同，独立复现关键检查、用实际产物和 runtime 证据核验 free 的结论并裁决冲突。 |
-| 执行 | `task:free` | 通用零成本 tier，几乎可无限并发；任务范围与其他 tier 相同，但单个结果低可信，只负责产出候选工作和证据，不能相互验证；关键结果必须经独立验证：简单场景由主 agent 自己验证，大片交付物交给不参与产出的 `task:low` 及以上 tier 验证。 |
+| 执行 | `task:low` | 通用低成本 tier，综合输入、输出、缓存等各类 token，每 1M token 约 0.01 USD，比 DeepSeek 任何版本都便宜；任务范围与其他 tier 相同，结果可信到可以直接交付，是委派工作的默认 tier；free 结果交给 subagent 验证时也由它担任验证者，独立复现关键检查、用实际产物和 runtime 证据核验 free 的结论并裁决冲突。 |
+| 执行 | `task:free` | 通用零成本 tier，几乎可无限并发；任务范围与其他 tier 相同，但单个结果低可信，只用于结果无需独立验证的工作：定位候选代码或文档、列举方案或假设、只影响下一步方向的探索性试验，错误无害或会在调用方下一步自然暴露。验证计入成本：需要验证才能采信的结果，free 加验证者比 `task:low` 一次做完更贵，所以落进仓库的改动、会被直接采信的结论和裁决交给 `task:low` 及以上。free 结果不能相互验证；意外成为关键结论时，仍由主 agent 或不参与产出的 `task:low` 及以上 tier 独立验证。 |
 | 讨论 | `discuss:divergent` | 只读发散视角，寻找问题边界外的替代方案及其代价。 |
 | 讨论 | `discuss:steady` | 只读保守视角，检查风险、隐藏假设、遗漏状态和简单方案。 |
 | 指导 | `mentor:default` | 无工具的持续导师，负责调查前审计划、调查后核对证据和遗漏。 |
 
-并行写入的隔离由派发方逐次决定，不绑定在 agent 定义上。不带 `isolated: true` 的 `task:*` 在派发方的工作目录里运行；同一仓库同时有两个以上写入者（同批派出，或前一个写入者仍在运行）时，每个写入者都设 `isolated: true`，只做调查的保持共享，结束后仍能用 `hub` 续聊。隔离 worker 的派工单里写仓库相对路径：OMP 的隔离只靠提示约束，派工单里指向派发方 checkout 的绝对路径会让 worker 的命令跑回派发方目录。隔离不替代文件所有权划分，重叠改动只会变成应用失败的 patch。常驻规则写在 `APPEND_SYSTEM.md` 和四个 `task:*` 定义里（子 agent 收不到 `APPEND_SYSTEM.md`）；模型忘了隔离时，`isolation-nudge.ts` 在派发那一刻拦截一次作为提醒。
+并行写入的隔离由派发方逐次决定，不绑定在 agent 定义上。不带 `isolated: true` 的 `task:*` 在派发方的工作目录里运行；同一仓库同时有两个以上写入者（同批派出，或前一个写入者仍在运行）时，每个写入者都设 `isolated: true`，只做调查的保持共享，结束后仍能用 `write agent://<id>` 续聊。隔离 worker 的派工单里写仓库相对路径：OMP 的隔离只靠提示约束，派工单里指向派发方 checkout 的绝对路径会让 worker 的命令跑回派发方目录。隔离不替代文件所有权划分，重叠改动只会变成应用失败的 patch。常驻规则写在 `APPEND_SYSTEM.md` 和四个 `task:*` 定义里（子 agent 收不到 `APPEND_SYSTEM.md`）；模型忘了隔离时，`isolation-nudge.ts` 在派发那一刻拦截一次作为提醒。
 
 `task` 和 `sonic` 不属于常规 tier，也不是 `agent/agents/` 中的定义；OMP 的 Vibe 模式把第一层 subagent 派发写死为这两个固定内置 subagent。因此它们只作为 Vibe 首层的特殊模型覆盖保留，常规任务不按它们选模型。
 
@@ -121,7 +121,7 @@ cp -a agent/agents agent/extensions "$HOME/.omp/agent/"
 
 `agent/extensions/` 下的扩展修正 OMP 与已安装插件的缺陷，或补充上下文、计费、主题和压缩等运行时能力。它们随 `agent/extensions/` 一起迁移，但在本机还有仓库之外的行为，迁移后需要知道。
 
-扩展内部用 `createAgentSession` 建的辅助会话（`bro`、`doc-polish`、`lang-nag`、`watchdog-agent` 的模型调用，`fork-task` 的 shake）一律传 `taskDepth: 1`。不传时 SDK 把它当主会话，`dispose()` 会顺带销毁全局 `AgentLifecycleManager`，当时所有空闲 subagent 被释放：原生 `task` 子代理变成 `Unknown agent`，之后无法再用 `hub` 续聊。`lang-nag` 在每次回复后都会建这样的会话，所以漏传会让 subagent 在主 agent 回复后几秒内失联。
+扩展内部用 `createAgentSession` 建的辅助会话（`bro`、`doc-polish`、`lang-nag`、`watchdog-agent` 的模型调用，`fork-task` 的 shake）一律传 `taskDepth: 1`。不传时 SDK 把它当主会话，`dispose()` 会顺带销毁全局 `AgentLifecycleManager`，当时所有空闲 subagent 被释放：原生 `task` 子代理变成 `Unknown agent`，之后无法再用 `write agent://<id>` 续聊。`lang-nag` 在每次回复后都会建这样的会话，所以漏传会让 subagent 在主 agent 回复后几秒内失联。
 
 ### `commandcode-model-spec.ts`
 
@@ -191,7 +191,7 @@ compact 完成后调用 `ctx-tool.ts` 导出的 `renderCtxListText` 与 `renderC
 
 机制：调用时把调用方会话 fork 到 `$TMPDIR/omp-fork-task/<uuid>/` 下的暂存文件，清零继承来的费用，给父会话尚未返回的工具调用补上中止结果，清空父会话的 todo，追加一条 `<system-notice cause="fork_task">` 说明这段对话只是背景；再删掉父会话的运行时状态（`session_init`、`model_change`、`thinking_level_change`、`service_tier_change` 以及 shake 辅助会话自己的 `session_exit`），被删条目的子条目改挂到上一级。共享子代理的会话头保留父会话 cwd，复活时按它重新打开；隔离子代理的会话头 cwd 置空，由执行器绑定到 worktree。shake 的恢复 artifact 写进父会话的 artifact 目录，子代理沿用同一个目录，所以引用能解析到原内容。`task` 在异步派发时先分配子代理 id 再触发 `before_subagent_spawn`，扩展在这个钩子里把暂存文件移到 `<父会话文件去掉 .jsonl>/<子代理 id>.jsonl`，执行器随后打开的就是这份副本而不是空会话。
 
-它依赖 OMP 内部实现：`AgentRegistry`、执行器的子会话文件路径与钩子顺序、会话条目类型。每次升级 OMP 后要用真实 TUI 重新验证继承、隔离、shake 和 `hub` 续聊。
+它依赖 OMP 内部实现：`AgentRegistry`、执行器的子会话文件路径与钩子顺序、会话条目类型。每次升级 OMP 后要用真实 TUI 重新验证继承、隔离、shake 和 `write agent://<id>` 续聊。
 
 ### `commandcode-usage.ts`
 

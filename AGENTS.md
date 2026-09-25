@@ -155,7 +155,7 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
   `lang-nag.ts`, `watchdog-agent.ts`, `fork-task.ts`) sets `taskDepth: 1`.
   Without it the SDK classifies the helper as a main session, and its
   `dispose()` tears down the global `AgentLifecycleManager`, releasing every
-  idle subagent (they become `Unknown agent` to `hub`).
+  idle subagent (they become `Unknown agent` and can no longer be messaged).
 - **Error handling:** hooks/tools are defensive — scan/read/glob failures degrade
   to empty/none or warnings rather than throwing (`ctx-tool.ts:442-457`,
   `ctx-tasklog.ts:239-267`). Model/provider request failures in `doc-polish.ts`
