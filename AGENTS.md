@@ -80,7 +80,7 @@ flowchart LR
 | Path | Purpose |
 | --- | --- |
 | `agent/` | Managed harness config. Only listed items are portable; the whole dir is **not**. |
-| `agent/extensions/` | Local TypeScript extensions (the code core). 17 `.ts` (incl. `bro.ts`, the built-in-AI rewrite of the former `pi-bro` plugin, `watchdog-agent.ts`, `fork-task.ts`, which seeds native `task` children with a copy of the caller's conversation, and `task-split-check.ts`, which blocks main-agent `task` calls whose items bundle independent tasks) + `doc-polish.json`/`lang-nag.json` sidecars (`lang-nag.json` is synced both ways; `doc-polish.json` is machine-local/prompt-overridable — see Important Files). |
+| `agent/extensions/` | Local TypeScript extensions (the code core). 17 `.ts` (incl. `bro.ts`, the built-in-AI rewrite of the former `pi-bro` plugin, `watchdog-agent.ts`, `fork-task.ts`, which seeds native `task` children with a copy of the caller's conversation, and `task-split-check.ts`, which blocks main-agent `task` calls whose items cover more than one topic) + `doc-polish.json`/`lang-nag.json` sidecars (`lang-nag.json` is synced both ways; `doc-polish.json` is machine-local/prompt-overridable — see Important Files). |
 | `agent/agents/` | Custom subagent definitions (`*.md`) + `README.txt` authoring pitfalls. |
 | `agent/thinking-translator.json` | Agent-root translator config for `omp-thinking-translator`. Portable regular item: `/sync-omp-config` carries machine → repo, `/update-omp` carries repo → machine. |
 | `.omp/commands/` | Project-level slash-command definitions run from repo root. |

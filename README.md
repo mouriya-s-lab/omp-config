@@ -185,7 +185,7 @@ compact 完成后调用 `ctx-tool.ts` 导出的 `buildInventory` 建立一份 in
 
 ### `task-split-check.ts`
 
-主 agent 调用 `task` 时，扩展在 `tool_call` 阶段把派给 `task:low`、`task:free`、`task:mid` 的每一项交给 `openai-codex/gpt-6-sol`（推理强度 medium）判断：模型只看共享 `context` 和该项的 `task` 文本，不读文件、不带工具，回答这一项是否把多个独立任务塞给了一个 agent（`true`/`false`）。各项并发判断，主 agent 要等最慢的那一项返回；任一项为 `true` 时整次调用被拦下，主 agent 收到「你没有好好规划任务：…拆成多个 item 后重新派发。」。判定结果按判定 prompt（共享 `context` + 该项 `task`）的 sha256 缓存在进程内存里，完全相同的 prompt 再次派发直接沿用上次结果，不再请求模型；失败不缓存。只对主会话生效（会话文件名匹配 `<时间戳>_<uuid>.jsonl`），subagent 的 `task` 调用和 `fork_task` 不检查。模型不可用、请求失败、回答无法解析或超过 25 秒时放行；这个上限低于宿主 30 秒的 `tool_call` 超时，否则宿主会按超时拦下调用。每次判定写一条 `task-split-check verdicts` info 日志（含是否命中缓存），每项每次未命中缓存的派发消耗一次该模型请求。
+主 agent 调用 `task` 时，扩展在 `tool_call` 阶段把派给 `task:low`、`task:free`、`task:mid` 的每一项交给 `openai-codex/gpt-6-sol`（推理强度 medium）判断：模型只看共享 `context` 和该项的 `task` 文本，不读文件、不带工具，回答这一项是否把多个主题塞给了一个 agent（`true`/`false`）。判断看主题而不看文件数：同一个修改落到很多文件、围绕同一主题写几份文档都算一个主题；覆盖几块互不依赖的领域或问题的大调查、把不相干的功能、bug 或命令放进同一项才算多个主题。各项并发判断，主 agent 要等最慢的那一项返回；任一项为 `true` 时整次调用被拦下，主 agent 收到「你没有好好规划任务：…按主题拆成多个 item 后重新派发；确认是单一主题的项可以原样重新派发，第二次直接放行。」。拿到判定的 prompt（共享 `context` + 该项 `task`）按 sha256 记在进程内存里：完全相同的 prompt 第二次派发直接放行，不再请求模型，主 agent 可以借此强行派发它认为是单一主题的项；判定失败的不记录，下次照常判断。只对主会话生效（会话文件名匹配 `<时间戳>_<uuid>.jsonl`），subagent 的 `task` 调用和 `fork_task` 不检查。模型不可用、请求失败、回答无法解析或超过 25 秒时放行；这个上限低于宿主 30 秒的 `tool_call` 超时，否则宿主会按超时拦下调用。每次判定写一条 `task-split-check verdicts` info 日志，重复派发记为 `repeat`；每项每次首次出现的派发消耗一次该模型请求。
 
 ### `fork-task.ts`
 
