@@ -243,6 +243,9 @@ async function runSubSessionOnce(ctx: ExtensionContext, opts: SubSessionOptions)
 		enableMCP: false,
 		enableLsp: false,
 		disableExtensionDiscovery: true,
+		// Classify the helper as a subagent: a main-kind session's dispose tears
+		// down the global AgentLifecycleManager and strands every live subagent.
+		taskDepth: 1,
 		agentId: opts.agentId,
 	});
 	let deltas = "";

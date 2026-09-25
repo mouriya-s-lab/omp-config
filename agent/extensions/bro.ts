@@ -590,6 +590,9 @@ async function simplify(
 		enableMCP: false,
 		enableLsp: false,
 		disableExtensionDiscovery: true,
+		// Classify the helper as a subagent: a main-kind session's dispose tears
+		// down the global AgentLifecycleManager and strands every live subagent.
+		taskDepth: 1,
 		// Minimal system prompt: the bro prompt is self-contained and must NOT be
 		// wrapped in the coding-agent persona.
 		systemPrompt: [],

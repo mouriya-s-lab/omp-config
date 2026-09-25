@@ -111,12 +111,12 @@ export default function commandcodeUsage(pi: ExtensionAPI): void {
 	pi.on("session_start", (_event, ctx) => {
 		// Reuse the installed plugin's env/legacy-file lookup without copying its
 		// key into a new secret store. Stored OMP credentials take precedence.
-		ctx.modelRegistry.authStorage.setRuntimeUsageProvider("commandcode", commandcodeUsageProvider, getApiKey());
+		ctx.modelRegistry.authStorage.usage.setProvider("commandcode", commandcodeUsageProvider, getApiKey());
 	});
 	pi.on("session_shutdown", (_event, ctx) => {
-		const storage = ctx.modelRegistry.authStorage;
-		if (storage.usageProviderFor("commandcode") === commandcodeUsageProvider) {
-			storage.removeRuntimeUsageProvider("commandcode");
+		const usage = ctx.modelRegistry.authStorage.usage;
+		if (usage.providerFor("commandcode") === commandcodeUsageProvider) {
+			usage.removeProvider("commandcode");
 		}
 	});
 }

@@ -40,7 +40,7 @@
 
 POSIX/macOS/Linux 原子安装为可执行的 `omp-light`，入口使用 `#!/usr/bin/env bun` shebang；bash、zsh、fish 和 Unix `pwsh` 使用同一个 shebang 入口，不依赖 Bash 专用脚本。Windows 原子安装为同目录的 `omp-light.ts` 与最小 `omp-light.cmd`；Windows PowerShell 使用生成的 `.cmd` shim。
 
-入口从 `~/.omp/agent` 读取 `config-light.yml` 和 `APPEND_SYSTEM_LIGHT.md`，并只为本次进程使用短提示替换完整提示，通过配置覆盖禁用本仓库 `agent/extensions/` 下恰好 8 个可选行为扩展：`ctx-post-compact-hint.ts`、`ctx-tasklog.ts`、`ctx-tool.ts`、`doc-polish.ts`、`isolation-nudge.ts`、`lang-nag.ts`、`tool-policy-nag.ts`、`watchdog-agent.ts`。核心扩展 `bro.ts`、`commandcode-usage.ts`、`repo-rules.ts` 仍保持加载；以下 4 个兼容性/运行时修复也保持加载：`commandcode-model-spec.ts`、`unified-exec-bun-pty.ts`、`v2-compaction-timeout.ts`、`xai-oauth-cost-ticks.ts`。这些是本次进程的覆盖，不会修改扩展文件。
+入口从 `~/.omp/agent` 读取 `config-light.yml` 和 `APPEND_SYSTEM_LIGHT.md`，并只为本次进程使用短提示替换完整提示，通过配置覆盖禁用本仓库 `agent/extensions/` 下恰好 9 个可选行为扩展：`ctx-post-compact-hint.ts`、`ctx-tasklog.ts`、`ctx-tool.ts`、`doc-polish.ts`、`fork-task.ts`、`isolation-nudge.ts`、`lang-nag.ts`、`tool-policy-nag.ts`、`watchdog-agent.ts`。核心扩展 `bro.ts`、`commandcode-usage.ts`、`repo-rules.ts` 仍保持加载；以下 4 个兼容性/运行时修复也保持加载：`commandcode-model-spec.ts`、`unified-exec-bun-pty.ts`、`v2-compaction-timeout.ts`、`xai-oauth-cost-ticks.ts`。这些是本次进程的覆盖，不会修改扩展文件。
 
 其余能力和设置保持不变：OMP 默认配置、已安装插件、tools、`AGENTS/context`、`rules`、`skills`，以及 `model`/`thinking`/`profile`/`auth`/`session` 设置均保留。`omp-light` 后面的 CLI 参数会原样转发给 `omp`，后置参数可以覆盖 launcher 先设置的同名参数。
 
@@ -121,6 +121,8 @@ cp -a agent/agents agent/extensions "$HOME/.omp/agent/"
 
 `agent/extensions/` 下的扩展修正 OMP 与已安装插件的缺陷，或补充上下文、计费、主题和压缩等运行时能力。它们随 `agent/extensions/` 一起迁移，但在本机还有仓库之外的行为，迁移后需要知道。
 
+扩展内部用 `createAgentSession` 建的辅助会话（`bro`、`doc-polish`、`lang-nag`、`watchdog-agent` 的模型调用，`fork-task` 的 shake）一律传 `taskDepth: 1`。不传时 SDK 把它当主会话，`dispose()` 会顺带销毁全局 `AgentLifecycleManager`，当时所有空闲 subagent 被释放：原生 `task` 子代理变成 `Unknown agent`，之后无法再用 `hub` 续聊。`lang-nag` 在每次回复后都会建这样的会话，所以漏传会让 subagent 在主 agent 回复后几秒内失联。
+
 ### `commandcode-model-spec.ts`
 
 修 `--model` 指定 commandcode 模型时的失败。`models.db` 的 `model_cache` 把 commandcode 模型持久化成 `openai-completions`/`anthropic-messages`，启动期 `--model` 解析信任这些缓存行，于是走宿主 transport 并把字面量 `$COMMANDCODE_API_KEY` 当凭据发出，认证失败；不填 `--model` 时持久化模型走 live registration，所以一直正常。扩展在会话内把这类模型重选回插件的 `commandcode-custom`，不注册 provider、不写默认模型、不改缓存，每次重定向打印一行提示。
@@ -180,6 +182,16 @@ compact 完成后调用 `ctx-tool.ts` 导出的 `renderCtxListText` 与 `renderC
 ### `isolation-nudge.ts`
 
 某次 `task` 调用会让两个以上可写 agent（`task:*`、省略 `agent` 的项、`m1` 这类标记模型 agent）不带隔离地共用当前工作目录时——同一批里有多个，或本会话先前派出的共享写入者仍在运行——扩展在 `tool_call` 阶段拦下这次调用，拦截原因提醒：写入者带 `isolated: true` 重新派发，只做调查的项显式写 `isolated: false`。拦截就是提醒，按派工单 prompt 计：每项的 `task` 文本取 sha256，只有没提醒过的 prompt 会触发；模型原样再派同一批 prompt 就放行，换了新 prompt 会再触发一次。记录按会话保存在内存里，不持久化。它不替模型设置 `isolated`；显式写了 `isolated: false` 的项视为有意共享，不触发拦截；`task` 的 schema 里没有 `isolated`（隔离未启用或处于 plan mode）时也不拦截。“仍在运行”取自本会话拥有的 async job 快照；eval `agent()` / `workpool()` 派出的 agent 不计入。扩展也随 subagent 会话加载，各会话分别记录；处理出错时只记录 warning，`task` 按模型原样执行。
+
+### `fork-task.ts`
+
+注册 `fork_task` 工具：参数与 `task` 的批量形式相同，派出的就是原生 `task` 子代理，用它自己的 agent 定义（系统提示、`config.yml` 里的模型绑定、工具），Hub 行、`agent://`/`history://`、idle/park/revive、隔离与 patch 合并都走原生路径；唯一的区别是子代理的初始 transcript 是调用方当前对话的副本，之后才是它的派工单。用于派工单依赖本对话已经确定的需求、决定和已读内容、重述代价高的场合；需要独立视角（clean-room 审查、第二意见）时仍用 `task`。
+
+与 `task` 的差别：`isolated` 缺省为 `true`，显式写 `isolated: false` 才共享工作目录（隔离子代理与原生一样，结束后不能续聊）；每项可选 `shake: true`，对副本执行与 `/shake` 相同的 `session.shake("elide")`，把最近上下文之外的大段工具结果和大段代码/XML 块换成 `artifact://` 引用；每项的 `name` 追加 `_xxxx` 后缀，子代理 id 以结果里报告的为准；要求 `async.enabled: true`，否则直接报错。
+
+机制：调用时把调用方会话 fork 到 `$TMPDIR/omp-fork-task/<uuid>/` 下的暂存文件，清零继承来的费用，给父会话尚未返回的工具调用补上中止结果，清空父会话的 todo，追加一条 `<system-notice cause="fork_task">` 说明这段对话只是背景；再删掉父会话的运行时状态（`session_init`、`model_change`、`thinking_level_change`、`service_tier_change` 以及 shake 辅助会话自己的 `session_exit`），被删条目的子条目改挂到上一级。共享子代理的会话头保留父会话 cwd，复活时按它重新打开；隔离子代理的会话头 cwd 置空，由执行器绑定到 worktree。shake 的恢复 artifact 写进父会话的 artifact 目录，子代理沿用同一个目录，所以引用能解析到原内容。`task` 在异步派发时先分配子代理 id 再触发 `before_subagent_spawn`，扩展在这个钩子里把暂存文件移到 `<父会话文件去掉 .jsonl>/<子代理 id>.jsonl`，执行器随后打开的就是这份副本而不是空会话。
+
+它依赖 OMP 内部实现：`AgentRegistry`、执行器的子会话文件路径与钩子顺序、会话条目类型。每次升级 OMP 后要用真实 TUI 重新验证继承、隔离、shake 和 `hub` 续聊。
 
 ### `commandcode-usage.ts`
 

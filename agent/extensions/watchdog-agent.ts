@@ -466,6 +466,9 @@ async function runReviewer(pi: ExtensionAPI, ctx: ExtensionContext, spec: Watchd
 			enableMCP: false,
 			enableLsp: false,
 			disableExtensionDiscovery: true,
+			// Classify the helper as a subagent: a main-kind session's dispose tears
+			// down the global AgentLifecycleManager and strands every live subagent.
+			taskDepth: 1,
 			agentId: `watchdog-${spec.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "watchdog"}`,
 		});
 		const unsubscribe = session.subscribe((event: unknown) => {

@@ -80,7 +80,7 @@ flowchart LR
 | Path | Purpose |
 | --- | --- |
 | `agent/` | Managed harness config. Only listed items are portable; the whole dir is **not**. |
-| `agent/extensions/` | Local TypeScript extensions (the code core). 15 `.ts` (incl. `bro.ts`, the built-in-AI rewrite of the former `pi-bro` plugin, and `watchdog-agent.ts`) + `doc-polish.json`/`lang-nag.json` sidecars (`lang-nag.json` is synced both ways; `doc-polish.json` is machine-local/prompt-overridable — see Important Files). |
+| `agent/extensions/` | Local TypeScript extensions (the code core). 16 `.ts` (incl. `bro.ts`, the built-in-AI rewrite of the former `pi-bro` plugin, `watchdog-agent.ts`, and `fork-task.ts`, which seeds native `task` children with a copy of the caller's conversation) + `doc-polish.json`/`lang-nag.json` sidecars (`lang-nag.json` is synced both ways; `doc-polish.json` is machine-local/prompt-overridable — see Important Files). |
 | `agent/agents/` | Custom subagent definitions (`*.md`) + `README.txt` authoring pitfalls. |
 | `agent/thinking-translator.json` | Agent-root translator config for `omp-thinking-translator`. Portable regular item: `/sync-omp-config` carries machine → repo, `/update-omp` carries repo → machine. |
 | `.omp/commands/` | Project-level slash-command definitions run from repo root. |
@@ -143,12 +143,19 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
   `tool-policy-nag.ts`, `commandcode-model-spec.ts`).
 - **Lifecycle events used:** `session_start`, `before_agent_start`, `input`,
   `tool_call`, `tool_result`, `message_end`, `session_compact`,
-  `auto_compaction_end`, `session_shutdown`, `session_switch/branch/tree`.
+  `auto_compaction_end`, `before_subagent_spawn`, `session_shutdown`,
+  `session_switch/branch/tree`.
 - **Imports:** type-only `ExtensionAPI`/`ExtensionContext`; runtime imports from
   `@oh-my-pi/pi-coding-agent` (`createAgentSession`, `SessionManager`, `z`,
   `getAgentDir`, ...), `@oh-my-pi/pi-natives` (`glob`/`grep`), `@oh-my-pi/pi-ai`
   (usage types). Node built-ins (`node:fs`, `node:path`, `node:crypto`, ...) are
   used heavily.
+- **Helper sessions pass `taskDepth: 1`:** every `createAgentSession` an
+  extension builds for its own model calls (`bro.ts`, `doc-polish.ts`,
+  `lang-nag.ts`, `watchdog-agent.ts`, `fork-task.ts`) sets `taskDepth: 1`.
+  Without it the SDK classifies the helper as a main session, and its
+  `dispose()` tears down the global `AgentLifecycleManager`, releasing every
+  idle subagent (they become `Unknown agent` to `hub`).
 - **Error handling:** hooks/tools are defensive — scan/read/glob failures degrade
   to empty/none or warnings rather than throwing (`ctx-tool.ts:442-457`,
   `ctx-tasklog.ts:239-267`). Model/provider request failures in `doc-polish.ts`
@@ -195,7 +202,7 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
 - `agent/APPEND_SYSTEM.md` — global system-prompt appendix (orchestration stance,
   agent tiers, shared-checkout vs `isolated: true` rules, tool policy). Task children
   never receive it, so rules they need are repeated in the `task:*` definitions.
-- `agent/config-light.yml` — declarative light-mode config overlay: disables eight
+- `agent/config-light.yml` — declarative light-mode config overlay: disables nine
   optional behavior extensions while retaining the three core extensions and four
   compatibility/runtime fixes described in `README.md`.
 - `agent/APPEND_SYSTEM_LIGHT.md` — short system-prompt appendix used only by
