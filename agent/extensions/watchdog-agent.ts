@@ -329,38 +329,48 @@ function countableEntries(entries: ReadonlyArray<unknown>): number {
 	return n;
 }
 
-/** Bounded tail of the transcript, rendered compactly, excluding our own advisories. */
-function renderTranscript(entries: ReadonlyArray<unknown>, budget: number): string {
-	const parts: string[] = [];
-	for (const e of entries) {
-		if (!hasKey(e, "type") || e.type !== "message") continue;
-		const m = hasKey(e, "message") ? e.message : undefined;
-		if (!hasKey(m, "role") || typeof m.role !== "string") continue;
-		const role = m.role;
-		const content = hasKey(m, "content") ? m.content : undefined;
-		if (role === "assistant") {
-			const text = textBlocks(content).trim();
-			const calls = toolCallSummaries(content);
-			const segs: string[] = [];
-			if (text) segs.push(`ASSISTANT: ${trunc(text, PER_ENTRY_LIMIT)}`);
-			for (const c of calls) segs.push(`  → tool ${trunc(c, PER_ENTRY_LIMIT)}`);
-			if (segs.length > 0) parts.push(segs.join("\n"));
-		} else if (role === "user") {
-			const text = textBlocks(content).trim();
-			if (text.startsWith(ADVISORY_TAG)) continue; // skip our own advisory injections
-			if (text) parts.push(`USER: ${trunc(text, PER_ENTRY_LIMIT)}`);
-		} else if (role === "toolResult") {
-			const name = hasKey(m, "toolName") && typeof m.toolName === "string" ? m.toolName : "tool";
-			const text = textBlocks(content).trim();
-			parts.push(`RESULT[${name}]: ${trunc(text, PER_ENTRY_LIMIT)}`);
-		} else if (role === "developer") {
-			const text = textBlocks(content).trim();
-			if (text) parts.push(`DEV: ${trunc(text, PER_ENTRY_LIMIT)}`);
-		}
+/** One entry's compact rendering, or undefined when it contributes nothing (incl. our own advisories). */
+function renderEntry(e: unknown): string | undefined {
+	if (!hasKey(e, "type") || e.type !== "message") return undefined;
+	const m = hasKey(e, "message") ? e.message : undefined;
+	if (!hasKey(m, "role") || typeof m.role !== "string") return undefined;
+	const role = m.role;
+	const content = hasKey(m, "content") ? m.content : undefined;
+	if (role === "assistant") {
+		const text = textBlocks(content).trim();
+		const calls = toolCallSummaries(content);
+		const segs: string[] = [];
+		if (text) segs.push(`ASSISTANT: ${trunc(text, PER_ENTRY_LIMIT)}`);
+		for (const c of calls) segs.push(`  → tool ${trunc(c, PER_ENTRY_LIMIT)}`);
+		return segs.length > 0 ? segs.join("\n") : undefined;
 	}
+	if (role === "user") {
+		const text = textBlocks(content).trim();
+		if (text.startsWith(ADVISORY_TAG)) return undefined; // skip our own advisory injections
+		return text ? `USER: ${trunc(text, PER_ENTRY_LIMIT)}` : undefined;
+	}
+	if (role === "toolResult") {
+		const name = hasKey(m, "toolName") && typeof m.toolName === "string" ? m.toolName : "tool";
+		return `RESULT[${name}]: ${trunc(textBlocks(content).trim(), PER_ENTRY_LIMIT)}`;
+	}
+	if (role === "developer") {
+		const text = textBlocks(content).trim();
+		return text ? `DEV: ${trunc(text, PER_ENTRY_LIMIT)}` : undefined;
+	}
+	return undefined;
+}
+
+/**
+ * Bounded tail of the transcript, rendered compactly, excluding our own advisories.
+ * Walks from the newest entry and stops once the budget is full, so per-turn cost
+ * tracks the budget rather than the whole branch.
+ */
+function renderTranscript(entries: ReadonlyArray<unknown>, budget: number): string {
 	let out = "";
-	for (let i = parts.length - 1; i >= 0; i--) {
-		const next = out ? `${parts[i]}\n${out}` : parts[i];
+	for (let i = entries.length - 1; i >= 0; i--) {
+		const part = renderEntry(entries[i]);
+		if (part === undefined) continue;
+		const next = out ? `${part}\n${out}` : part;
 		if (next.length > budget && out !== "") break;
 		out = next;
 	}

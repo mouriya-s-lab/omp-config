@@ -9,11 +9,12 @@
  * digest. Per-context handoff, task log, and subagent history stay on
  * disk and are exactly what `ctx list` and `ctx show` surface. Nudging
  * the model to call them costs round trips and is easy to skip; this
- * plugin renders the same text through the tool's own helpers
- * (`renderCtxListText`, `renderCtxShowText`) and delivers a single
- * user message right after the boundary. The show payload is the main
- * session's own — subagents' details still require an explicit
- * `ctx show <id>` to keep the injection bounded.
+ * plugin builds one ctx inventory and renders it through the tool's own
+ * helpers (`renderCtxListText`, `renderCtxShowText`), so list and show
+ * describe the same snapshot, and delivers a single user message right
+ * after the boundary. The show payload is the main session's own —
+ * subagents' details still require an explicit `ctx show <id>` to keep
+ * the injection bounded.
  *
  * Scope. Main session only, mirroring tool-policy-nag: subagents run
  * short, decomposed slices and do not benefit from a post-compaction
@@ -23,7 +24,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from '@oh-my-pi/pi-coding-agent';
-import { renderCtxListText, renderCtxShowText } from './ctx-tool';
+import { buildInventory, renderCtxListText, renderCtxShowText } from './ctx-tool';
 
 /**
  * Two events fire per compaction boundary. Any pair within this window
@@ -92,10 +93,9 @@ export default function ctxPostCompactHint(pi: ExtensionAPI): void {
         // arriving mid-flight cannot double-inject.
         lastSentAt = now;
         try {
-            const [list, show] = await Promise.all([
-                renderCtxListText(ctx),
-                renderCtxShowText(ctx),
-            ]);
+            const inventory = await buildInventory(ctx);
+            const list = await renderCtxListText(inventory);
+            const show = await renderCtxShowText(inventory);
             if (!list) return;
             pi.logger.info('Post-compaction ctx injected', {
                 reason,

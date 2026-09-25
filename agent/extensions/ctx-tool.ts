@@ -26,16 +26,18 @@ const SIDECAR_SUMMARY_PATTERN = '"(?:summary|report|report_path|review|verdict|a
 /**
  * Matches the first-line session header JSON object emitted by OMP into
  * each `*.jsonl` transcript (`{"type":"session","id":"…","timestamp":…}`).
- * `grep` in `headersFor` uses this to pull just the header line rather
- * than reading whole files; a hit is parsed by `parseSessionHeader`.
+ * `readSpawnHeader` stops reading a transcript once this and
+ * `SESSION_INIT_PATTERN` have matched; a hit is parsed by `parseSessionHeader`.
  */
-const SESSION_HEADER_PATTERN = '"type"\\s*:\\s*"session"';
+const SESSION_HEADER_PATTERN = /"type"\s*:\s*"session"/;
 /**
  * Matches the `session_init` record OMP writes after the header line;
- * `headersFor` greps it to recover the spawned agent flavor
+ * `readSpawnHeader` uses it to recover the spawned agent flavor
  * (`"agent":"task:low"`), parsed by `parseSessionInitAgent`.
  */
-const SESSION_INIT_PATTERN = '"type"\\s*:\\s*"session_init"';
+const SESSION_INIT_PATTERN = /"type"\s*:\s*"session_init"/;
+const HEADER_READ_CHUNK_BYTES = 64 * 1024;
+const HEADER_READ_CONCURRENCY = 16;
 
 const contextParams = z.object({
 	op: z.enum(["list", "show"]),
@@ -173,7 +175,7 @@ type RegistrySource = {
 
 type ContextSource = TranscriptSource | RegistrySource;
 
-type Inventory = {
+export type Inventory = {
 	readonly localRoot: string;
 	readonly artifactRoot: string | undefined;
 	readonly current: CurrentSessionState;
@@ -498,69 +500,82 @@ function parseSessionInitAgent(line: string): string | undefined {
 	return textField(parsed.agent);
 }
 
+/**
+ * First session-header and `session_init` lines of one transcript. Reads from the
+ * start and stops once both have matched, so cost tracks the head of the file
+ * (the header plus the init record's system prompt), not the whole transcript.
+ */
+async function readSpawnHeader(file: string): Promise<SpawnHeader | undefined> {
+	let handle: FileHandle | undefined;
+	try {
+		handle = await open(file, "r");
+		const decoder = new TextDecoder();
+		const chunk = new Uint8Array(HEADER_READ_CHUNK_BYTES);
+		let headerLine: string | undefined;
+		let initLine: string | undefined;
+		const scan = (line: string): void => {
+			if (headerLine === undefined && SESSION_HEADER_PATTERN.test(line)) headerLine = line;
+			if (initLine === undefined && SESSION_INIT_PATTERN.test(line)) initLine = line;
+		};
+		let position = 0;
+		let pending = "";
+		while (headerLine === undefined || initLine === undefined) {
+			const { bytesRead } = await handle.read(chunk, 0, chunk.length, position);
+			if (bytesRead === 0) {
+				pending += decoder.decode();
+				if (pending) scan(pending);
+				break;
+			}
+			position += bytesRead;
+			pending += decoder.decode(chunk.subarray(0, bytesRead), { stream: true });
+			let start = 0;
+			for (let end = pending.indexOf("\n"); end !== -1; end = pending.indexOf("\n", start)) {
+				scan(pending.slice(start, end));
+				start = end + 1;
+				if (headerLine !== undefined && initLine !== undefined) break;
+			}
+			pending = pending.slice(start);
+		}
+		const agent = initLine === undefined ? undefined : parseSessionInitAgent(initLine);
+		if (headerLine === undefined) return agent ? { agent } : undefined;
+		const base = parseSessionHeader(headerLine);
+		return agent ? { ...base, agent } : base;
+	} catch {
+		return undefined;
+	} finally {
+		if (handle) await handle.close().catch(() => undefined);
+	}
+}
+
+/**
+ * Spawn headers keyed by relative transcript path. Unchanged transcripts (same
+ * mtime + size as the cached entry) reuse the cached header; only new or changed
+ * ones are read, with bounded concurrency.
+ */
 async function headersFor(
 	root: string | undefined,
 	matches: readonly GlobMatch[],
 ): Promise<ReadonlyMap<string, SpawnHeader>> {
 	const active = matches.filter(match => !path.posix.basename(normalizedRelativePath(match.path)).startsWith("__advisor"));
 	if (!root || active.length === 0) return new Map();
-	const cachedHeaders = new Map<string, SpawnHeader>();
-	let allFresh = true;
+	const headers = new Map<string, SpawnHeader>();
+	const stale: string[] = [];
 	for (const match of active) {
 		const relativePath = normalizedRelativePath(match.path);
-		const file = absoluteFromRelative(root, relativePath);
-		const cached = transcriptCache.get(file);
-		const metadata = metadataFromMatch(match);
-		if (!cached || !sameMetadata(cached, metadata)) {
-			allFresh = false;
-			continue;
-		}
-		cachedHeaders.set(relativePath, cached.header);
+		const cached = transcriptCache.get(absoluteFromRelative(root, relativePath));
+		if (cached && sameMetadata(cached, metadataFromMatch(match))) headers.set(relativePath, cached.header);
+		else stale.push(relativePath);
 	}
-	if (allFresh) return cachedHeaders;
-	try {
-		const [sessionResult, initResult] = await Promise.all([
-			grep({
-				pattern: SESSION_HEADER_PATTERN,
-				path: root,
-				glob: "*.jsonl",
-				mode: GrepOutputMode.Content,
-				maxCountPerFile: 1,
-				gitignore: false,
-				hidden: true,
-			}),
-			grep({
-				pattern: SESSION_INIT_PATTERN,
-				path: root,
-				glob: "*.jsonl",
-				mode: GrepOutputMode.Content,
-				maxCountPerFile: 1,
-				gitignore: false,
-				hidden: true,
-			}),
-		]);
-		const agents = new Map<string, string>();
-		for (const match of initResult.matches) {
-			const relativePath = normalizedRelativePath(match.path);
-			if (path.posix.basename(relativePath).startsWith("__advisor")) continue;
-			const agent = parseSessionInitAgent(match.line);
-			if (agent) agents.set(relativePath, agent);
+	let next = 0;
+	const readStale = async (): Promise<void> => {
+		while (next < stale.length) {
+			const relativePath = stale[next++]!;
+			const header = await readSpawnHeader(absoluteFromRelative(root, relativePath));
+			if (header) headers.set(relativePath, header);
 		}
-		const headers = new Map<string, SpawnHeader>();
-		for (const match of sessionResult.matches) {
-			const relativePath = normalizedRelativePath(match.path);
-			if (path.posix.basename(relativePath).startsWith("__advisor")) continue;
-			const base = parseSessionHeader(match.line);
-			const agent = agents.get(relativePath);
-			headers.set(relativePath, agent ? { ...base, agent } : base);
-		}
-		for (const [relativePath, agent] of agents) {
-			if (!headers.has(relativePath)) headers.set(relativePath, { agent });
-		}
-		return headers;
-	} catch {
-		return cachedHeaders;
-	}
+	};
+	await Promise.all(Array.from({ length: Math.min(HEADER_READ_CONCURRENCY, stale.length) }, readStale));
+	return headers;
 }
 
 function pruneTranscriptCache(activeFiles: ReadonlySet<string>): void {
@@ -1180,7 +1195,12 @@ async function subagentHandoff(
 	return { summary: { kind: "none" }, handoff: "(none)" };
 }
 
-async function buildInventory(ctx: ExtensionContext): Promise<Inventory> {
+/**
+ * One snapshot of the context tree (registry, transcripts, sidecars, task logs).
+ * Build it once per request and pass it to every renderer that should observe
+ * the same state.
+ */
+export async function buildInventory(ctx: ExtensionContext): Promise<Inventory> {
 	const options = localOptionsFor(ctx);
 	const localRoot = path.resolve(resolveLocalRoot(options));
 	const artifactRoot = artifactRootFor(ctx, options);
@@ -1279,7 +1299,11 @@ function sidecarNeeds(
 			const metadata = inventory.sidecars.metadataByPath.get(file);
 			if (!metadata) continue;
 			const cached = cachedSidecar(file, metadata);
-			if (cached) continue;
+			// sidecarSummaryFor stops at the first non-empty candidate, so later ones are never read.
+			if (cached) {
+				if (!cached.empty) break;
+				continue;
+			}
 			files.add(file);
 			extensions.add(file.endsWith(".json") ? "json" : "md");
 		}
@@ -1593,10 +1617,9 @@ async function hydrateShow(inventory: Inventory, target: ContextDraft): Promise<
  * error with the set of known ids.
  */
 export async function renderCtxListText(
-	ctx: ExtensionContext,
+	inventory: Inventory,
 	options: { id?: string; all?: boolean } = {},
 ): Promise<{ text: string; total: number; shown: number; hidden: number } | undefined> {
-	const inventory = await buildInventory(ctx);
 	const total = inventory.byId.size;
 	const viewRootDraft = options.id ? findDraft(inventory.root, options.id) : inventory.root;
 	if (options.id && !viewRootDraft) return undefined;
@@ -1631,10 +1654,9 @@ export async function renderCtxListText(
  * when the id is not in the inventory.
  */
 export async function renderCtxShowText(
-	ctx: ExtensionContext,
+	inventory: Inventory,
 	id?: string,
 ): Promise<{ text: string; id: string } | undefined> {
-	const inventory = await buildInventory(ctx);
 	const requestedId = id?.trim() || inventory.current.id;
 	const target = findDraft(inventory.root, requestedId);
 	if (!target) return undefined;
@@ -1659,30 +1681,28 @@ export default function ctxTool(pi: ExtensionAPI): void {
 		loadMode: "essential",
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 			if (signal?.aborted) return { content: [{ type: "text", text: "Cancelled" }] };
+			const requestedId = params.op === "show" ? params.id?.trim() : params.id;
+			if (params.op === "show" && !requestedId) throw new Error("ctx show requires an id");
+			const inventory = await buildInventory(ctx);
 			if (params.op === "list") {
-				const result = await renderCtxListText(ctx, { id: params.id, all: params.all });
-				if (!result) {
-					const inventory = await buildInventory(ctx);
-					const knownIds = [...inventory.byId.keys()].join(", ") || "(none)";
-					throw new Error(`Unknown context \"${params.id}\". Known ids: ${knownIds}`);
+				const result = await renderCtxListText(inventory, { id: params.id, all: params.all });
+				if (result) {
+					return {
+						content: [{ type: "text", text: result.text }],
+						details: { op: params.op, count: result.total, shown: result.shown, hidden: result.hidden, subtree: params.id } satisfies CtxToolDetails,
+					};
 				}
-				return {
-					content: [{ type: "text", text: result.text }],
-					details: { op: params.op, count: result.total, shown: result.shown, hidden: result.hidden, subtree: params.id } satisfies CtxToolDetails,
-				};
+			} else {
+				const result = await renderCtxShowText(inventory, requestedId);
+				if (result) {
+					return {
+						content: [{ type: "text", text: result.text }],
+						details: { op: params.op, count: 1 } satisfies CtxToolDetails,
+					};
+				}
 			}
-			const requestedId = params.id?.trim();
-			if (!requestedId) throw new Error("ctx show requires an id");
-			const result = await renderCtxShowText(ctx, requestedId);
-			if (!result) {
-				const inventory = await buildInventory(ctx);
-				const knownIds = [...inventory.byId.keys()].join(", ") || "(none)";
-				throw new Error(`Unknown context \"${requestedId}\". Known ids: ${knownIds}`);
-			}
-			return {
-				content: [{ type: "text", text: result.text }],
-				details: { op: params.op, count: 1 } satisfies CtxToolDetails,
-			};
+			const knownIds = [...inventory.byId.keys()].join(", ") || "(none)";
+			throw new Error(`Unknown context \"${requestedId}\". Known ids: ${knownIds}`);
 		},
 	});
 }

@@ -40,7 +40,7 @@
 
 POSIX/macOS/Linux 原子安装为可执行的 `omp-light`，入口使用 `#!/usr/bin/env bun` shebang；bash、zsh、fish 和 Unix `pwsh` 使用同一个 shebang 入口，不依赖 Bash 专用脚本。Windows 原子安装为同目录的 `omp-light.ts` 与最小 `omp-light.cmd`；Windows PowerShell 使用生成的 `.cmd` shim。
 
-入口从 `~/.omp/agent` 读取 `config-light.yml` 和 `APPEND_SYSTEM_LIGHT.md`，并只为本次进程使用短提示替换完整提示，通过配置覆盖禁用本仓库 `agent/extensions/` 下恰好 9 个可选行为扩展：`ctx-post-compact-hint.ts`、`ctx-tasklog.ts`、`ctx-tool.ts`、`doc-polish.ts`、`fork-task.ts`、`isolation-nudge.ts`、`lang-nag.ts`、`tool-policy-nag.ts`、`watchdog-agent.ts`。核心扩展 `bro.ts`、`commandcode-usage.ts`、`repo-rules.ts` 仍保持加载；以下 4 个兼容性/运行时修复也保持加载：`commandcode-model-spec.ts`、`unified-exec-bun-pty.ts`、`v2-compaction-timeout.ts`、`xai-oauth-cost-ticks.ts`。这些是本次进程的覆盖，不会修改扩展文件。
+入口从 `~/.omp/agent` 读取 `config-light.yml` 和 `APPEND_SYSTEM_LIGHT.md`，并只为本次进程使用短提示替换完整提示，通过配置覆盖禁用本仓库 `agent/extensions/` 下恰好 10 个可选行为扩展：`ctx-post-compact-hint.ts`、`ctx-tasklog.ts`、`ctx-tool.ts`、`doc-polish.ts`、`fork-task.ts`、`isolation-nudge.ts`、`lang-nag.ts`、`task-split-check.ts`、`tool-policy-nag.ts`、`watchdog-agent.ts`。核心扩展 `bro.ts`、`commandcode-usage.ts`、`repo-rules.ts` 仍保持加载；以下 4 个兼容性/运行时修复也保持加载：`commandcode-model-spec.ts`、`unified-exec-bun-pty.ts`、`v2-compaction-timeout.ts`、`xai-oauth-cost-ticks.ts`。这些是本次进程的覆盖，不会修改扩展文件。
 
 其余能力和设置保持不变：OMP 默认配置、已安装插件、tools、`AGENTS/context`、`rules`、`skills`，以及 `model`/`thinking`/`profile`/`auth`/`session` 设置均保留。`omp-light` 后面的 CLI 参数会原样转发给 `omp`，后置参数可以覆盖 launcher 先设置的同名参数。
 
@@ -165,7 +165,7 @@ tar -xzf "$pty_archive" -C "$pty_root"
 
 ### `ctx-tool.ts`
 
-注册只读 `ctx` 工具，支持 `ctx list [page=N]` 与 `ctx show <id>`。它从当前会话、subagent registry、transcript、compaction、sidecar summary 和 task log 组合上下文树。`list` 每行给出状态、summary 和任务计数（`done/total`），每页固定 20 条 DFS 前序结果，未指定或越界的 `page` 会被夹到有效区间，末行给出 `Page N/M — contexts a–b of N` 和下一页提示。`show` 输出 handoff 与 `## Tasks` 时间线：从 task-log 事件重放出每个任务的最新状态，`Completed` 与 `Open` 两段按本地时间升序展开，同一任务只保留最终状态（`start`/`block`/`unblock` 折叠为 open；`done` 覆盖为 completed；`drop`/`rm` 从时间线剔除），`block` 的原因作为 open 项后缀展示。不修改会话或文件。
+注册只读 `ctx` 工具，支持 `ctx list [<id>] [all=true]` 与 `ctx show <id>`。它从当前会话、subagent registry、transcript、compaction、sidecar summary 和 task log 组合上下文树。`list` 按 DFS 前序每行给出状态、summary 和任务计数（`done/total`，有阻塞时附 blocked）；默认隐藏内部 context（mentor/discuss/trace），末行注明隐藏数量，`all=true` 时一并列出；非根节点的后代超过 8 个时折叠成一行并附后代数，用 `ctx list <id>` 展开该子树。`show` 输出 handoff 与 `## Tasks` 时间线：从 task-log 事件重放出每个任务的最新状态，`Completed` 与 `Open` 两段按本地时间升序展开，同一任务只保留最终状态（`start`/`block`/`unblock` 折叠为 open；`done` 覆盖为 completed；`drop`/`rm` 从时间线剔除），`block` 的原因作为 open 项后缀展示。每次调用先建立一份 inventory 快照；transcript 的 mtime 与大小未变时复用进程内缓存的会话头，新增或变化的 transcript 只从文件开头读到 `session_init` 记录为止。不修改会话或文件。
 
 ### `ctx-tasklog.ts`
 
@@ -173,7 +173,7 @@ tar -xzf "$pty_archive" -C "$pty_root"
 
 ### `ctx-post-compact-hint.ts`
 
-compact 完成后调用 `ctx-tool.ts` 导出的 `renderCtxListText` 与 `renderCtxShowText`，在 `<post-compact-ctx>` 块里同时注入 `## List`（默认 page 1，与 `ctx list` 逐字一致）和 `## Current session`（主会话的 handoff + Tasks 时间线，与 `ctx show <main-id>` 逐字一致）；`list` 总页数 > 1 时在头部注明当前页和下一页命令，subagent 详情仍需模型自己 `ctx show <id>` 拉取。同时监听 `session_compact` 与成功的 `auto_compaction_end`（跳过 aborted/skipped/无 result），用 5 秒窗口去重两个事件；只对主会话生效，subagent 不注入。渲染失败只记录 warning，不影响 session。
+compact 完成后调用 `ctx-tool.ts` 导出的 `buildInventory` 建立一份 inventory 快照，再用 `renderCtxListText` 与 `renderCtxShowText` 渲染同一快照，在 `<post-compact-ctx>` 块里同时注入 `## List`（与 `ctx list` 逐字一致）和 `## Current session`（主会话的 handoff + Tasks 时间线，与 `ctx show <main-id>` 逐字一致）；subagent 详情仍需模型自己 `ctx show <id>` 拉取。同时监听 `session_compact` 与成功的 `auto_compaction_end`（跳过 aborted/skipped/无 result），用 5 秒窗口去重两个事件；只对主会话生效，subagent 不注入。渲染失败只记录 warning，不影响 session。
 
 ### `tool-policy-nag.ts`
 
@@ -182,6 +182,10 @@ compact 完成后调用 `ctx-tool.ts` 导出的 `renderCtxListText` 与 `renderC
 ### `isolation-nudge.ts`
 
 某次 `task` 调用会让两个以上可写 agent（`task:*`、省略 `agent` 的项、`m1` 这类标记模型 agent）不带隔离地共用当前工作目录时——同一批里有多个，或本会话先前派出的共享写入者仍在运行——扩展在 `tool_call` 阶段拦下这次调用，拦截原因提醒：写入者带 `isolated: true` 重新派发，只做调查的项显式写 `isolated: false`。拦截就是提醒，按派工单 prompt 计：每项的 `task` 文本取 sha256，只有没提醒过的 prompt 会触发；模型原样再派同一批 prompt 就放行，换了新 prompt 会再触发一次。记录按会话保存在内存里，不持久化。它不替模型设置 `isolated`；显式写了 `isolated: false` 的项视为有意共享，不触发拦截；`task` 的 schema 里没有 `isolated`（隔离未启用或处于 plan mode）时也不拦截。“仍在运行”取自本会话拥有的 async job 快照；eval `agent()` / `workpool()` 派出的 agent 不计入。扩展也随 subagent 会话加载，各会话分别记录；处理出错时只记录 warning，`task` 按模型原样执行。
+
+### `task-split-check.ts`
+
+主 agent 调用 `task` 时，扩展在 `tool_call` 阶段把派给 `task:low`、`task:free`、`task:mid` 的每一项交给 `openai-codex/gpt-6-sol`（推理强度 medium）判断：模型只看共享 `context` 和该项的 `task` 文本，不读文件、不带工具，回答这一项是否把多个独立任务塞给了一个 agent（`true`/`false`）。各项并发判断，主 agent 要等最慢的那一项返回；任一项为 `true` 时整次调用被拦下，主 agent 收到「你没有好好规划任务：…拆成多个 item 后重新派发。」。判定结果按判定 prompt（共享 `context` + 该项 `task`）的 sha256 缓存在进程内存里，完全相同的 prompt 再次派发直接沿用上次结果，不再请求模型；失败不缓存。只对主会话生效（会话文件名匹配 `<时间戳>_<uuid>.jsonl`），subagent 的 `task` 调用和 `fork_task` 不检查。模型不可用、请求失败、回答无法解析或超过 25 秒时放行；这个上限低于宿主 30 秒的 `tool_call` 超时，否则宿主会按超时拦下调用。每次判定写一条 `task-split-check verdicts` info 日志（含是否命中缓存），每项每次未命中缓存的派发消耗一次该模型请求。
 
 ### `fork-task.ts`
 
