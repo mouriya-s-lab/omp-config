@@ -223,8 +223,13 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
   `.md`/`.json` sidecar artifacts.
 - `install-plugins.sh` — declared plugin list: `pi-commandcode-provider`,
   `pi-package-search`, `pi-unified-exec`, `pi-pretty-codeblocks`, `pi-schedule`, and
-  the GitHub URL `Mouriya-Emma/omp-thinking-translator` (unpinned; `omp install`
-  resolves versions; its runtime config is the portable agent-root `thinking-translator.json` above). The former `pi-bro` plugin is now the local `agent/extensions/bro.ts`.
+  the GitHub URLs `mouriya-s-lab/pi-bansos` (our fork of npm `pi-bansos`, carrying
+  fixes also submitted upstream to `mannnrachman/pi-bansos`), `Mouriya-Emma/omp-thinking-translator`
+  (its runtime config is the portable agent-root `thinking-translator.json` above), and
+  `mouriya-s-lab/omp-codex-image-gen`. All unpinned: `omp install` resolves npm versions,
+  and GitHub URLs track the default branch (re-run the same `omp install <url>` to update). An existing
+  npm `pi-bansos` install must be removed with `omp plugin uninstall pi-bansos` before installing the fork URL.
+  The former `pi-bro` plugin is now the local `agent/extensions/bro.ts`.
 - `plugin-audit.sh` — drift report; base commit `5974c4fa`; requires `omp` on PATH
   and a git worktree.
 - `.omp/commands/{update-omp,sync-omp-config,migrate-omp-keys}.md` — the command

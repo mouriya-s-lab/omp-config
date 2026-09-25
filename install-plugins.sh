@@ -7,7 +7,7 @@ command -v omp >/dev/null 2>&1 || {
 }
 
 plugins=(
-  'pi-bansos'
+  'https://github.com/mouriya-s-lab/pi-bansos'
   'pi-commandcode-provider'
   'pi-package-search'
   'pi-unified-exec'
