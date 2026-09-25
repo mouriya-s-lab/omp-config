@@ -185,9 +185,11 @@ compact 完成后调用 `ctx-tool.ts` 导出的 `renderCtxListText` 与 `renderC
 
 ### `fork-task.ts`
 
-注册 `fork_task` 工具：参数与 `task` 的批量形式相同，派出的就是原生 `task` 子代理，用它自己的 agent 定义（系统提示、`config.yml` 里的模型绑定、工具），Hub 行、`agent://`/`history://`、idle/park/revive、隔离与 patch 合并都走原生路径；唯一的区别是子代理的初始 transcript 是调用方当前对话的副本，之后才是它的派工单。用于派工单依赖本对话已经确定的需求、决定和已读内容、重述代价高的场合；需要独立视角（clean-room 审查、第二意见）时仍用 `task`。
+注册 `fork_task` 工具：参数与 `task` 的批量形式相同，派出的就是原生 `task` 子代理，用它自己的 agent 定义（系统提示、`config.yml` 里的模型绑定、工具），Hub 行、`agent://`/`history://`、idle/park/revive、隔离与 patch 合并都走原生路径；唯一的区别是子代理的初始 transcript 是调用方当前对话的副本，之后才是它的派工单。工具说明推荐在复杂场景优先用它：多步实现、调试或设计落地，派工单依赖本对话已经确定的需求、决定和已读内容，重述代价高或会丢信息；需要独立视角（clean-room 审查、第二意见）或背景很短时仍用 `task`。
 
-与 `task` 的差别：`isolated` 缺省为 `true`，显式写 `isolated: false` 才共享工作目录（隔离子代理与原生一样，结束后不能续聊）；每项可选 `shake: true`，对副本执行与 `/shake` 相同的 `session.shake("elide")`，把最近上下文之外的大段工具结果和大段代码/XML 块换成 `artifact://` 引用；每项的 `name` 追加 `_xxxx` 后缀，子代理 id 以结果里报告的为准；要求 `async.enabled: true`，否则直接报错。
+与 `task` 的差别：`isolated` 缺省为 `true`，显式写 `isolated: false` 才共享工作目录（隔离子代理与原生一样，结束后不能续聊）；每项可选 `shake: true`，对副本执行与 `/shake` 相同的 `session.shake("elide")`；每项的 `name` 追加 `_xxxx` 后缀，子代理 id 以结果里报告的为准；要求 `async.enabled: true`，否则直接报错。工具说明推荐每项保持 `isolated` 缺省值并传 `shake: true`。
+
+shake 的范围按 OMP 18.3.1 的手动 `/shake` 配置（`AGGRESSIVE_SHAKE_CONFIG`）：副本最近约 4,000 token（即本对话末尾）整体保留；更早的部分里，所有文本工具结果不论大小都被替换，user/assistant/developer 消息里不少于 400 token 的围栏代码块（```/~~~）和顶层小写 XML 元素也被替换。`skill` 结果与 `skill://` 读取、当前 plan 文件读取、块外正文、thinking、工具调用参数不动，已被 compaction 概括掉的历史不处理。被替换处变成 `[shaken ~N tokens — recover: artifact://<id> (region K)]`，子代理可以 `read` 这个 artifact 取回原文。
 
 机制：调用时把调用方会话 fork 到 `$TMPDIR/omp-fork-task/<uuid>/` 下的暂存文件，清零继承来的费用，给父会话尚未返回的工具调用补上中止结果，清空父会话的 todo，追加一条 `<system-notice cause="fork_task">` 说明这段对话只是背景；再删掉父会话的运行时状态（`session_init`、`model_change`、`thinking_level_change`、`service_tier_change` 以及 shake 辅助会话自己的 `session_exit`），被删条目的子条目改挂到上一级。共享子代理的会话头保留父会话 cwd，复活时按它重新打开；隔离子代理的会话头 cwd 置空，由执行器绑定到 worktree。shake 的恢复 artifact 写进父会话的 artifact 目录，子代理沿用同一个目录，所以引用能解析到原内容。`task` 在异步派发时先分配子代理 id 再触发 `before_subagent_spawn`，扩展在这个钩子里把暂存文件移到 `<父会话文件去掉 .jsonl>/<子代理 id>.jsonl`，执行器随后打开的就是这份副本而不是空会话。
 
