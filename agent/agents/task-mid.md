@@ -1,6 +1,6 @@
 ---
 name: task:mid
-description: "General-purpose mid-cost tier on an Opus-class model: blended cost about USD 0.3 per 1M tokens across input, output, and cached tokens, roughly the same as GLM 5.2. Handles any bounded slice with stronger expected judgment and trustworthiness than the cheaper tiers; fits when errors are costly, evidence is hard to obtain, or cheaper workers disagree."
+description: "General-purpose mid-cost tier on an Opus-class model: blended cost about USD 0.3 per 1M tokens across input, output, and cached tokens, roughly the same as GLM 5.2. Handles any bounded slice outside design and core work with stronger expected judgment and trustworthiness than the cheaper tiers; fits when errors are costly, evidence is hard to obtain, or cheaper workers disagree. Never assign it any design or core work: architecture, domain types and state model, interfaces and cross-slice contracts, the central logic of a change, or the design of docs, prompts, skills, or agent definitions."
 spawns: task:low, task:free, task:mid, task:high, discuss:steady, discuss:divergent, mentor:default
 ---
 

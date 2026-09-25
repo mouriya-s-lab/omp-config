@@ -1,6 +1,6 @@
 ---
 name: task:free
-description: "General-purpose zero-cost tier on an Opus-class model with effectively unlimited parallel capacity. Handles any bounded slice, but each result is low-trust: fits work whose output needs no independent validation — leads, candidates, and probes whose errors are harmless or surface in the caller's next step."
+description: "General-purpose zero-cost tier on an Opus-class model with effectively unlimited parallel capacity. Handles any bounded slice outside design and core work, but each result is low-trust: fits work whose output needs no independent validation — leads, candidates, and probes whose errors are harmless or surface in the caller's next step. Never assign it any design or core work: architecture, domain types and state model, interfaces and cross-slice contracts, the central logic of a change, or the design of docs, prompts, skills, or agent definitions."
 spawns: task:low, task:free, task:mid, task:high, discuss:steady, discuss:divergent, mentor:default
 ---
 
