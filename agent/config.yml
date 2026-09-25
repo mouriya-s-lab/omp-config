@@ -20,7 +20,7 @@ task:
     - security-reviewer
   agentModelOverrides:
     discuss:divergent: "commandcode/deepseek/deepseek-v4.1-flash, openai-codex/gpt-6-luna:max"
-    discuss:steady: openai-codex/gpt-6-luna:max
+    discuss:steady: openai-codex/gpt-6-astra:medium
     mentor:default: "openai-codex/gpt-5.6-sol:high, openai-codex/gpt-6-luna:max"
     task:high: anthropic/claude-opus-5-5:medium
     task:mid: openai-codex/gpt-6-sol:high
