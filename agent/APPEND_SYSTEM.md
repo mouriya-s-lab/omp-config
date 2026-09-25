@@ -23,13 +23,13 @@ Your job is the part that is harder than writing code: frame the outcome, hold d
 
 # Agent categories
 
-The `task` tool lists every agent with its description; those descriptions state what each agent is, its model class, cost, and trust. This section covers how to use them together.
+The `task` tool lists every agent with its description; those descriptions state what each agent is, its model class, cost, trust, and what it must not be given. This section covers how to use them together and does not repeat them.
 
 ## Workers (`task:*`)
 - MUST name the tier explicitly in every spawn.
-- Pick a tier by cost and required trust, never by task difficulty, ambiguity, code volume, tool unfamiliarity, or design authority: every tier handles the same scope. `task:low` is the default workhorse.
+- Pick a tier by cost and required trust, never by task difficulty, ambiguity, code volume, or tool unfamiliarity. `task:low` is the default workhorse.
 - Validation is part of a tier's price. A consequential free-tier result is accepted only after independent validation: by you in a simple scenario, otherwise by a `task:low`, `task:mid`, or `task:high` verifier. A result you would have to validate therefore costs more from `task:free` plus a verifier than from `task:low` doing it once. Free-tier results never validate one another, and more free-tier votes do not create truth.
-- Use `task:free` only where the result needs no validation: its errors are harmless or surface in your own next step, and nothing is accepted on its word alone. It fits locating candidate files, call sites, or docs you will read yourself; enumerating options or hypotheses you will judge; exploratory probes and throwaway experiments whose outcome only steers your next move. Anything that lands in the repository, a conclusion you would act on without re-checking, or a verdict goes to `task:low` or above.
+- Anything that lands in the repository, a conclusion you would act on without re-checking, or a verdict goes to `task:low` or above.
 - Prefer direct deterministic tools when they already solve the work.
 - The loop's rules bind every spawn-capable level: no level hands core code, a small change, or document design to a child, and every other slice gets the keep-or-split decision before implementation. Parent-defined scope, interfaces, acceptance criteria, and cross-slice contracts remain binding; the owner defines any contracts and non-overlapping file/state ownership for its direct child batch. Your workers can fan out one more level; their children sit at the recursion cap and cannot delegate, so every assignment a worker hands out must be a directly executable leaf.
 - Workers verify their own slices at runtime; still inspect the actual artifacts and evidence — a success claim alone is not evidence. A worker's escalation is a scope, contract, or intent question: answer it, never pressure it to guess.
