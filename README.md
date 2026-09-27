@@ -127,7 +127,7 @@ cp pi/agent/pi-bansos-relay-state.json "$HOME/.pi/agent/"
 
 `agent/extensions/` 下的扩展修正 OMP 与已安装插件的缺陷，或补充上下文、计费、主题和压缩等运行时能力。它们随 `agent/extensions/` 一起迁移，但在本机还有仓库之外的行为，迁移后需要知道。
 
-扩展内部用 `createAgentSession` 建的辅助会话（`bro`、`doc-polish`、`lang-nag`、`watchdog-agent` 的模型调用，`fork-task` 的 shake）一律传 `taskDepth: 1`。不传时 SDK 把它当主会话，`dispose()` 会顺带销毁全局 `AgentLifecycleManager`，当时所有空闲 subagent 被释放：原生 `task` 子代理变成 `Unknown agent`，之后无法再用 `write agent://<id>` 续聊。`lang-nag` 在每次回复后都会建这样的会话，所以漏传会让 subagent 在主 agent 回复后几秒内失联。
+扩展内部用 `createAgentSession` 建的辅助会话（`bro`、`doc-polish`、`lang-nag`、`watchdog-agent` 的聊天 reviewer、`fork-task` 的 shake）一律传 `taskDepth: 1`。不传时 SDK 把它当主会话，`dispose()` 会顺带销毁全局 `AgentLifecycleManager`，当时所有空闲 subagent 被释放：原生 `task` 子代理变成 `Unknown agent`，之后无法再用 `write agent://<id>` 续聊。`lang-nag` 在每次回复后都会建这样的会话，所以漏传会让 subagent 在主 agent 回复后几秒内失联。
 
 ### `commandcode-model-spec.ts`
 
@@ -248,22 +248,30 @@ shake 的范围按 OMP 18.3.1 的手动 `/shake` 配置（`AGGRESSIVE_SHAKE_CONF
 
 ### `watchdog-agent.ts`
 
-由 `WATCHDOG-*.md` 文件驱动的「按目标」reviewer（watchdog），补足原生 advisor 的一个空档：原生 advisor 能按 agent 开关（`task.agentAdvisor` / agent frontmatter `advisor:`），但它发现到的 `WATCHDOG.md`/`WATCHDOG.yml` 会推给所有被顾问的会话，无法把审阅内容只投给某个目标。ExtensionAPI 没有介入原生 advisor 的钩子，所以本扩展是自带的独立 reviewer（用 `createAgentSession`，与 `lang-nag`/`doc-polish` 同型），不是对原生子系统的扩展。
+由 `WATCHDOG-*.md` 文件驱动的「按目标」watchdog，补足原生 advisor 的一个空档：原生 advisor 能按 agent 开关（`task.agentAdvisor` / agent frontmatter `advisor:`），但它发现到的 `WATCHDOG.md`/`WATCHDOG.yml` 会推给所有被顾问的会话，无法把审阅内容只投给某个目标。ExtensionAPI 没有介入原生 advisor 的钩子，所以本扩展自带运行路径，不是对原生子系统的扩展。**本扩展只识别 `WATCHDOG-<标签>.md`，不接管原生 `WATCHDOG.md`。**
 
-文件名为 `WATCHDOG-<标签>.md`，头部用 Claude `rule.md` 式 frontmatter：
+文件头使用 Claude `rule.md` 式 frontmatter。`target`（必填）为 `main`、子 agent 名（如 `task:low`）、`*`、`subagents` 或逗号分隔列表，决定这份 watchdog 监视谁。后端二选一：
 
-- `target`（必填）：`main` | 子 agent 名（如 `task:low`、`discuss:divergent`） | `*` | `subagents` | 逗号分隔列表。决定这份 watchdog 监视谁，正文只投给匹配的目标。
-- `model`（可选）：reviewer 模型，支持 `:effort` 后缀；缺省用 `advisor` 角色（`@advisor`），再退到当前会话模型。
-- `tools`（可选）：reviewer 可用的内置工具，默认只读 `read`/`grep`/`glob`；非白名单名（read/grep/glob/ast_grep/web_search/edit/write/bash/eval）被丢弃。
-- `name` / `enabled`（默认 `true`） / `delivery`（`aside`|`steer`|`nextTurn`|`followUp`，默认 `aside`） / `maxPerContext`（默认 `6`）。
+- **聊天 reviewer（原有默认）**：`model` 可选，支持 `:effort` 后缀；缺省用 `advisor` 角色（`@advisor`），再退到当前会话模型。`tools` 可选，默认只读 `read`/`grep`/`glob`；非白名单名（read/grep/glob/ast_grep/web_search/edit/write/bash/eval）被丢弃。正文是 reviewer 的审阅重点。用 `createAgentSession` 跑一遍允许检查工作区的 reviewer，返回 `PASS` 或自拟的严重度和具体问题说明。
+- **原生 Jev 判定（显式选择）**：`judge: typesafe/jev-latest` 或 `judge: openrouter/~typesafe/jev-latest`；必须同时填写非空 `note:` 和正文，分别是**配置作者预写的提醒**和 Jev 判断违例的准则。`judge` 不可与 `model`、`tools` 或思考强度后缀合用，配置无效时跳过该文件并记录 warning。`judge` 查找已可用的原生 judgment 模型并核对其 API，不把同名 chat 模型当作原生 Jev。它向原生 API 发送最近 transcript（可能含既有工具调用与结果）和正文准则，只请求 `pass` / `nit` / `concern` / `blocker` 四选一；非 `pass` 时交付预写 `note`，明确标记为 Jev 触发而非 Jev 撰写的调查结论。Jev 不会自行调用工具核查或生成自由文本解释，也不会自动回退到聊天 reviewer。使用 OMP 已有的模型注册表、凭据和 endpoint；不可用、鉴权失败、响应无效或超时则不发送提醒，不把失败当 `pass`。
 
-frontmatter 之后的正文是交给 reviewer 的审阅重点。发现路径：用户级 `~/.omp/agent/WATCHDOG-*.md`，仓库级从 cwd 向 git root 逐层取 `<dir>/WATCHDOG-*.md` 与 `<dir>/.omp/WATCHDOG-*.md`。会话身份：主会话文件名匹配 `<时间戳>_<uuid>.jsonl`，子 agent 从会话文件的 `session_init.agent` 读出 agent 名。
+例如在 `~/.omp/agent/WATCHDOG-Evidence.md`：
 
-运行：在每个结算轮次（`agent_end` 且非 `willContinue`）、且会话身份匹配某个 watchdog 时，渲染有界的最近 transcript（排除自身注入的 `<watchdog>` 消息），对每个匹配的 watchdog 用其模型+工具各跑一遍 reviewer；判定不通过时以 `<watchdog name=… severity=…>` 通过 `sendUserMessage` 注入回该会话。按归一化文本去重，并按 context 上限封顶以防循环。任何失败路径（无匹配、模型解析失败、reviewer 出错或超时、文件损坏）都降级为不提示，绝不阻塞或破坏主轮次。
+```md
+---
+target: main
+judge: typesafe/jev-latest
+note: 请重新核对最新结论的运行时证据。
+delivery: aside
+---
+仅当最近的工作宣称代码已验证、却没有给出实际运行时证据时标记违例。
+```
 
-隔离与无递归：扩展会随 restricted children 被 rebind 进 subagent 会话，因此能作用于子 agent；reviewer 自身的 `createAgentSession` 用 `disableExtensionDiscovery: true` + 内存态 `SessionManager`，不会递归加载本扩展。
+两种后端共用 `name`、`enabled`（默认 `true`）、`delivery`（`aside`|`steer`|`nextTurn`|`followUp`，默认 `aside`）、`maxPerContext`（默认 `6`）。发现路径：用户级 `~/.omp/agent/WATCHDOG-*.md`，仓库级从 cwd 向 git root 逐层取 `<dir>/WATCHDOG-*.md` 与 `<dir>/.omp/WATCHDOG-*.md`。主会话文件名匹配 `<时间戳>_<uuid>.jsonl`，子 agent 从会话文件的 `session_init.agent` 读出 agent 名。
 
-仓库之外的运行时行为：需在 `~/.omp/agent/` 或仓库 `.omp/` 放置 `WATCHDOG-*.md` 才生效，无匹配文件时完全静默；reviewer 按其模型独立消耗额度。子 agent 上的注入是尽力而为——只有在该轮于执行器收走切片结果前重新打开时才落地；主会话上，空闲时注入会开启新一轮（标准 advisor 行为）。
+每个结算轮次（`agent_end` 且非 `willContinue`）渲染有界的最近 transcript，排除自身注入的 `<watchdog>` 消息；按所配置后端判断，非通过时以 `<watchdog name=… severity=…>` 通过 `sendUserMessage` 注入到匹配会话。按提醒文本去重、按 context 上限封顶；Jev 的固定 `note` 因而每个 context 至多发送一次。无匹配或任何后端失败均不提示，不阻塞主轮次；Jev 判定用量及按目录价格算出的费用仅写入扩展 info 日志，ExtensionContext 的只读 session manager 不支持写入模型用量台账，因此不计入会话用量统计。
+
+扩展随 restricted children rebind 进子 agent 会话。聊天 reviewer 自身以 `disableExtensionDiscovery: true` + 内存态 `SessionManager` 创建，不递归加载本扩展；Jev 没有辅助 agent 会话。需放置匹配的 `WATCHDOG-*.md` 才生效；子 agent 上注入是尽力而为（仅在执行器收走切片结果前重新打开时落地），主会话空闲时注入会开启新一轮。两种后端按各自模型独立消耗额度。
 
 ## 执行安装
 

@@ -5,6 +5,8 @@ import {
 	type ExtensionAPI,
 	type ExtensionContext,
 } from "@oh-my-pi/pi-coding-agent";
+import { TypeSafeJudge, isJudgmentApi } from "@oh-my-pi/pi-ai";
+import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -29,25 +31,31 @@ import { basename, dirname, join, resolve } from "node:path";
 //                  from cwd up to the git root.
 // Frontmatter (Claude rule.md style, between `---` fences):
 //   target: main            # main | <subagent-name> | * | subagents | CSV list
-//   model:  anthropic/claude-sonnet-4-5:medium   # optional; else @advisor role
-//   tools:  [read, grep, glob]                   # optional; reviewer's tools
+//   model:  anthropic/claude-sonnet-4-5:medium   # chat reviewer; else @advisor role
+//   tools:  [read, grep, glob]                   # optional; chat reviewer's tools
+//   judge:  typesafe/jev-latest                  # alternative native Jev backend
+//   note:   Recheck the latest work against the rule. # required with judge
 //   name:   Architecture                          # optional label
 //   enabled: true                                 # optional, default true
 //   delivery: aside                               # aside|steer|nextTurn|followUp
 //   maxPerContext: 6                              # optional safety cap
-// Body after the frontmatter = the review priorities handed to the reviewer.
+// Body = review priorities for chat; judgment criterion for Jev. Jev evaluates
+// only the supplied transcript and triggers the author-written note; it has no
+// tools, free-form explanation, or implicit chat fallback.
 //
 // RUNTIME. On each settled agent turn (`agent_end`, non-continuation) in a
-// session whose identity matches a discovered watchdog, the extension renders a
-// bounded tail of the transcript, runs each matching watchdog's reviewer model
-// (its own read-only `createAgentSession`, with tools so it can inspect the
-// workspace), and — when the reviewer flags something — injects a `<watchdog>`
-// note back into that session via `sendUserMessage`. Repeats are de-duplicated
-// and bounded per context so a stubborn model cannot loop.
+// session whose identity matches a discovered watchdog, render a bounded tail
+// of the transcript. Chat reviewers use a tool-capable `createAgentSession` to
+// inspect and write findings. Native Jev uses `Judge.judge` on the transcript
+// and only selects pass/nit/concern/blocker; a non-pass choice triggers the
+// file author's prewritten `note`, never a fabricated model explanation.
+// Findings are injected into that session via `sendUserMessage`. Repeats are
+// de-duplicated and bounded per context so a stubborn model cannot loop.
 //
-// FAILURE POLICY. Every failure path (no match, unresolved model, reviewer
-// error/timeout, malformed file) degrades to "no note". The extension never
-// blocks, mutates, or corrupts a primary turn.
+// FAILURE POLICY. Every failure path (no match, unresolved model, judge
+// unavailable, reviewer error/timeout, malformed file) degrades to "no note".
+// Explicit native judge selection never falls back to a chat model. The
+// extension never blocks, mutates, or corrupts a primary turn.
 //
 // SCOPE HONESTY. On a subagent the note is best-effort: it lands if the turn
 // re-opens before the executor collects the slice result. On the main session a
@@ -95,16 +103,28 @@ type DeliverAs = "aside" | "steer" | "nextTurn" | "followUp";
 
 type Identity = { readonly kind: "main" } | { readonly kind: "sub"; readonly agent: string; readonly fileId: string };
 
-type WatchdogSpec = {
+type WatchdogBase = {
 	readonly name: string;
 	readonly targets: readonly string[];
-	readonly model?: string;
-	readonly tools: readonly string[];
 	readonly delivery: DeliverAs;
 	readonly maxPerContext: number;
 	readonly guidance: string;
 	readonly filePath: string;
 };
+
+type ChatWatchdog = WatchdogBase & {
+	readonly kind: "chat";
+	readonly model?: string;
+	readonly tools: readonly string[];
+};
+
+type JevWatchdog = WatchdogBase & {
+	readonly kind: "jev";
+	readonly judge: { readonly provider: string; readonly modelId: string };
+	readonly note: string;
+};
+
+type WatchdogSpec = ChatWatchdog | JevWatchdog;
 
 type Verdict =
 	| { readonly kind: "pass" }
@@ -187,8 +207,8 @@ function parseFrontmatter(raw: string): { fields: Record<string, string>; body: 
 	return { fields, body: raw.slice(m[0].length) };
 }
 
-/** Parse one `WATCHDOG-*.md`; returns null when disabled, targetless, or unreadable. */
-function parseWatchdogFile(path: string): WatchdogSpec | null {
+/** Parse one `WATCHDOG-*.md`; returns null when disabled, invalid, targetless, or unreadable. */
+function parseWatchdogFile(path: string, warn?: (message: string) => void): WatchdogSpec | null {
 	let raw: string;
 	try {
 		raw = readFileSync(path, "utf8");
@@ -207,15 +227,34 @@ function parseWatchdogFile(path: string): WatchdogSpec | null {
 	const maxPerContext = normalizeCap(fields.maxpercontext);
 	const fallbackName = basename(path).replace(/^WATCHDOG-/i, "").replace(/\.md$/i, "");
 
-	return {
+	const common: WatchdogBase = {
 		name: fields.name ? unquote(fields.name) : fallbackName || "watchdog",
 		targets,
-		model: fields.model ? unquote(fields.model) : undefined,
-		tools: tools.length > 0 ? tools : [...DEFAULT_TOOLS],
 		delivery,
 		maxPerContext,
 		guidance: body.trim(),
 		filePath: path,
+	};
+	if (fields.judge !== undefined) {
+		const judge = unquote(fields.judge);
+		const slash = judge.indexOf("/");
+		if (fields.model !== undefined || fields.tools !== undefined || !common.guidance || !unquote(fields.note ?? "") ||
+			slash <= 0 || slash === judge.length - 1 || THINKING_SUFFIXES[judge.slice(judge.lastIndexOf(":") + 1).toLowerCase()] === true) {
+			warn?.(`watchdog "${path}": judge requires provider/model, a nonempty body and note; model, tools and thinking suffixes are not allowed`);
+			return null;
+		}
+		return {
+			...common,
+			kind: "jev",
+			judge: { provider: judge.slice(0, slash), modelId: judge.slice(slash + 1) },
+			note: unquote(fields.note ?? ""),
+		};
+	}
+	return {
+		...common,
+		kind: "chat",
+		model: fields.model ? unquote(fields.model) : undefined,
+		tools: tools.length > 0 ? tools : [...DEFAULT_TOOLS],
 	};
 }
 
@@ -396,7 +435,7 @@ function resolveModelSpec(ctx: ExtensionContext, base: string): Model | undefine
 }
 
 /** Reviewer model + thinking level: explicit `model` (honoring `:effort`), else the `advisor` role. */
-function resolveReviewer(ctx: ExtensionContext, spec: WatchdogSpec): { model: Model; thinkingLevel: string } | null {
+function resolveReviewer(ctx: ExtensionContext, spec: ChatWatchdog): { model: Model; thinkingLevel: string } | null {
 	if (spec.model) {
 		const { base, effort } = splitEffort(spec.model);
 		const model = resolveModelSpec(ctx, base);
@@ -456,7 +495,7 @@ async function withTimeout(ctx: ExtensionContext, work: Promise<unknown>, ms: nu
 }
 
 /** Runs one reviewer session over the transcript. Never throws; failures → null. */
-async function runReviewer(pi: ExtensionAPI, ctx: ExtensionContext, spec: WatchdogSpec, transcript: string): Promise<Verdict | null> {
+async function runReviewer(pi: ExtensionAPI, ctx: ExtensionContext, spec: ChatWatchdog, transcript: string): Promise<Verdict | null> {
 	const reviewer = resolveReviewer(ctx, spec);
 	if (!reviewer) {
 		pi.logger?.warn?.(`watchdog "${spec.name}": no reviewer model resolved (model=${spec.model ?? "@advisor"}) — skipping`);
@@ -523,6 +562,77 @@ function lastAssistantText(messages: unknown): string {
 	return "";
 }
 
+/** Native Jev answers a typed choice, not a chat message. The configured note is authored by the watchdog file. */
+async function runJev(pi: ExtensionAPI, ctx: ExtensionContext, spec: JevWatchdog, transcript: string): Promise<Verdict | null> {
+	const model = ctx.modelRegistry.getAvailable("judge").find(
+		candidate => candidate.provider === spec.judge.provider && candidate.id === spec.judge.modelId,
+	);
+	if (!model || !isJudgmentApi(model.api)) {
+		pi.logger?.warn?.(`watchdog "${spec.name}": native judge ${spec.judge.provider}/${spec.judge.modelId} unavailable — skipping`);
+		return null;
+	}
+	const signal = AbortSignal.timeout(REVIEW_TIMEOUT_MS);
+	try {
+		const sessionId = ctx.sessionManager.getSessionId();
+		const apiKey = await ctx.modelRegistry.getApiKey(model, sessionId, { signal });
+		if (!apiKey) {
+			pi.logger?.warn?.(`watchdog "${spec.name}": native judge credentials unavailable — skipping`);
+			return null;
+		}
+		const headers = await ctx.modelRegistry.resolveModelHeaders(model, signal);
+		const judge = new TypeSafeJudge({
+			apiKey: ctx.modelRegistry.resolver(model, sessionId),
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			baseUrl: model.baseUrl,
+			headers,
+		});
+		const result = await judge.judge({
+			state: { guidance: spec.guidance, transcript },
+			questions: {
+				review: {
+					type: "choice",
+					instructions: "Judge only the latest work in the supplied transcript against the configured guidance. Choose pass when the evidence is insufficient; otherwise choose the most appropriate severity. Do not infer facts outside the supplied transcript.",
+					criteria: {
+						pass: "No clear violation of the configured guidance in the latest work.",
+						nit: "A concrete, minor violation of the configured guidance.",
+						concern: "A concrete, substantive violation requiring correction.",
+						blocker: "A clear, high-risk violation preventing acceptance.",
+					},
+				},
+			},
+		}, { signal });
+		if (result.usage.cost.total === 0) calculateCost(model, result.usage);
+		pi.logger?.info?.(`watchdog "${spec.name}": native judge usage`, {
+			provider: result.provider,
+			model: result.model,
+			input: result.usage.input,
+			output: result.usage.output,
+			cost: result.usage.cost.total,
+		});
+		switch (result.answers.review.choice) {
+			case "pass": return { kind: "pass" };
+			case "nit":
+			case "concern":
+			case "blocker":
+				return {
+					kind: "advice",
+					severity: result.answers.review.choice,
+					note: `Native Jev triggered configured watchdog guidance (no Jev-authored explanation or independent tool use): ${spec.note}`,
+				};
+			default:
+				pi.logger?.warn?.(`watchdog "${spec.name}": native judge returned an unsupported choice — skipping`);
+				return null;
+		}
+	} catch (error) {
+		pi.logger?.warn?.(`watchdog "${spec.name}": native judge failed — skipping`, {
+			error: error instanceof Error ? error.name : "unknown",
+		});
+		return null;
+	}
+}
+
 function normalizeNote(note: string): string {
 	return note.toLowerCase().replace(/\s+/g, " ").trim();
 }
@@ -556,7 +666,7 @@ export default function watchdogAgent(pi: ExtensionAPI): void {
 		}
 		const matched: WatchdogSpec[] = [];
 		for (const file of discoverWatchdogFiles(ctx.cwd)) {
-			const spec = parseWatchdogFile(file);
+			const spec = parseWatchdogFile(file, message => pi.logger?.warn?.(message));
 			if (spec && matchesIdentity(spec, identity)) matched.push(spec);
 		}
 		specs = matched;
@@ -597,7 +707,9 @@ export default function watchdogAgent(pi: ExtensionAPI): void {
 			if (transcript.trim() === "") return;
 			for (const spec of specs) {
 				if (exhausted) break;
-				const verdict = await runReviewer(pi, ctx, spec, transcript);
+				const verdict = spec.kind === "jev"
+					? await runJev(pi, ctx, spec, transcript)
+					: await runReviewer(pi, ctx, spec, transcript);
 				if (!verdict || verdict.kind !== "advice") continue;
 				const key = normalizeNote(verdict.note);
 				if (key === "" || sentNotes.has(key)) continue;

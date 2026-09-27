@@ -159,11 +159,12 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
 - **Imports:** type-only `ExtensionAPI`/`ExtensionContext`; runtime imports from
   `@oh-my-pi/pi-coding-agent` (`createAgentSession`, `SessionManager`, `z`,
   `getAgentDir`, ...), `@oh-my-pi/pi-natives` (`glob`/`grep`), `@oh-my-pi/pi-ai`
-  (usage types). Node built-ins (`node:fs`, `node:path`, `node:crypto`, ...) are
-  used heavily.
+  (usage types and the native `TypeSafeJudge`/`isJudgmentApi` used by
+  `watchdog-agent.ts`), `@oh-my-pi/pi-catalog/models` (`calculateCost`).
+  Node built-ins (`node:fs`, `node:path`, `node:crypto`, ...) are used heavily.
 - **Helper sessions pass `taskDepth: 1`:** every `createAgentSession` an
   extension builds for its own model calls (`bro.ts`, `doc-polish.ts`,
-  `lang-nag.ts`, `watchdog-agent.ts`, `fork-task.ts`) sets `taskDepth: 1`.
+  `lang-nag.ts`, `watchdog-agent.ts` chat reviewer, `fork-task.ts`) sets `taskDepth: 1`.
   Without it the SDK classifies the helper as a main session, and its
   `dispose()` tears down the global `AgentLifecycleManager`, releasing every
   idle subagent (they become `Unknown agent` and can no longer be messaged).
@@ -213,7 +214,8 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
   `fetch.enabled: false`, `browser.enabled: false`).
 - `agent/settings.json` — minimal legacy extension path: `{"extensions": ["~/.claude"]}`.
 - `agent/APPEND_SYSTEM.md` — global system-prompt appendix (orchestration stance,
-  agent tiers, shared-checkout vs `isolated: true` rules, tool policy). Task children
+  spawn briefing, agent chat and lifecycle, `task` vs `fork_task`, agent tiers, shared-checkout
+  vs `isolated: true` rules, tool policy). Task children
   never receive it, so rules they need are repeated in the `task:*` definitions.
 - `agent/config-light.yml` — declarative light-mode config overlay: disables ten
   optional behavior extensions while retaining the three core extensions and four
