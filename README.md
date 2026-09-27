@@ -10,7 +10,7 @@
 /sync-omp-config
 ```
 
-方向严格单向（本机 `~/.omp/agent` → 仓库 `agent/`），只读本机文件。同步范围包含普通配置、扩展、`thinking-translator.json` 以及轻量模式的 `config-light.yml`、`APPEND_SYSTEM_LIGHT.md`、`omp-light.ts`；`thinking-translator.json` 按本机 `~/.omp/agent/thinking-translator.json` → 仓库对应文件比对后覆盖，写入前后用 `bun -e` 以 `JSON.parse` 确认可解析；已安装的 `omp-light` / `omp-light.cmd` 不属于同步内容。加 `check` 参数只报告差异、不写入也不提交：
+方向严格单向（本机 `~/.omp/agent` → 仓库 `agent/`，另把本机 `~/.pi/agent/pi-bansos-relay-state.json` → 仓库 `pi/agent/pi-bansos-relay-state.json`），只读本机文件。同步范围包含普通配置、扩展、`thinking-translator.json`、`pi-bansos-relay-state.json` 以及轻量模式的 `config-light.yml`、`APPEND_SYSTEM_LIGHT.md`、`omp-light.ts`；`thinking-translator.json` 按本机 `~/.omp/agent/thinking-translator.json` → 仓库对应文件比对后覆盖，写入前后用 `bun -e` 以 `JSON.parse` 确认可解析；已安装的 `omp-light` / `omp-light.cmd` 不属于同步内容。加 `check` 参数只报告差异、不写入也不提交：
 
 ```
 /sync-omp-config check
@@ -26,7 +26,7 @@
 /update-omp
 ```
 
-方向严格单向（仓库 `agent/` → 本机 `~/.omp/agent`，会写本机）。更新 `config.yml`、`settings.json`、`agents/`、`extensions/*.ts`、`extensions/lang-nag.json`、`APPEND_SYSTEM.md`、`thinking-translator.json`、轻量模式三项资产（`config-light.yml`、`APPEND_SYSTEM_LIGHT.md`、`omp-light.ts`）和插件。agent 定义和 `config.yml` 里的模型绑定一起更新，避免 agent 名和模型对不上。本机已有的结构化配置（`config.yml`、`settings.json`、各 JSON）只按字段改有差异的行，不整文件覆盖；`config.yml` 里 `/sync-omp-config` 列出的本机字段（如 `modelRoles`、`theme`）不动。`doc-polish.json`（本机相关、本机已存在就不动，否则询问用户）和 `commandcode-models.json`（本机生成、不迁移）不随更新迁移。更新同时把轻量入口安装到 PATH 上已解析的 `omp` 可执行文件同目录：POSIX/macOS/Linux 为 `omp-light`，Windows 为 `omp-light.ts` 加 `omp-light.cmd`。`check` 参数只报告差异、不写本机：
+方向严格单向（仓库 `agent/` → 本机 `~/.omp/agent`，另把 `pi/agent/pi-bansos-relay-state.json` → 本机 `~/.pi/agent/`，会写本机）。更新 `config.yml`、`settings.json`、`agents/`、`extensions/*.ts`、`extensions/lang-nag.json`、`APPEND_SYSTEM.md`、`thinking-translator.json`、`pi-bansos-relay-state.json`、轻量模式三项资产（`config-light.yml`、`APPEND_SYSTEM_LIGHT.md`、`omp-light.ts`）和插件。agent 定义和 `config.yml` 里的模型绑定一起更新，避免 agent 名和模型对不上。本机已有的结构化配置（`config.yml`、`settings.json`、各 JSON）只按字段改有差异的行，不整文件覆盖；`config.yml` 里 `/sync-omp-config` 列出的本机字段（如 `modelRoles`、`theme`）不动。`doc-polish.json`（本机相关、本机已存在就不动，否则询问用户）和 `commandcode-models.json`（本机生成、不迁移）不随更新迁移。更新同时把轻量入口安装到 PATH 上已解析的 `omp` 可执行文件同目录：POSIX/macOS/Linux 为 `omp-light`，Windows 为 `omp-light.ts` 加 `omp-light.cmd`。`check` 参数只报告差异、不写本机：
 
 ```
 /update-omp check
@@ -98,6 +98,8 @@ Claude Code 2.1.280 的 subagent worktree 实现分析见 [`docs/claude-code-sub
 - `agent/agents/`：agent 定义
 - `agent/extensions/`：本地扩展代码
 
+另有 `pi/agent/pi-bansos-relay-state.json` 复制到本机 `~/.pi/agent/`：`pi-bansos` 插件的状态文件（relay 开关、当前 relay、已存 relay 列表、状态栏显示），由插件的 `/bansos` 命令写入，插件从 `~/.pi/agent` 而不是 `~/.omp/agent` 读取。插件默认显示 `relay: ON/OFF` 状态栏，隐藏设置只存在这个文件里，缺了它新机器会重新显示。
+
 安装目录中的 `omp-light`（POSIX）以及 Windows 的 `omp-light.ts` / `omp-light.cmd` 是安装输出，不属于仓库复制集。直接迁移除复制上述三项轻量资产外，还必须在目标机运行 `/update-omp`，或按同一安装契约把入口安装到 PATH 上已解析的 `omp` 同目录；只复制 `agent/` 文件不会让 `omp-light` 出现在 PATH。
 
 不要复制整个 `agent/` 目录。数据库、WAL、日志、会话、缓存和锁文件是运行时状态，不属于迁移内容；`models.yml` 和 `commandcode-models.json` 含本机 API key 或本机生成的目录，同样不迁移。
@@ -113,6 +115,8 @@ cp agent/config.yml agent/settings.json agent/APPEND_SYSTEM.md \
   agent/config-light.yml agent/APPEND_SYSTEM_LIGHT.md agent/omp-light.ts \
   "$HOME/.omp/agent/"
 cp -a agent/agents agent/extensions "$HOME/.omp/agent/"
+mkdir -p "$HOME/.pi/agent"
+cp pi/agent/pi-bansos-relay-state.json "$HOME/.pi/agent/"
 ```
 
 复制后按上面的安装契约安装 `omp-light`；其中 PATH 上的 `omp` 必须先存在。Windows PowerShell 需要生成的 `omp-light.cmd` shim，不能把 POSIX 可执行文件当作 Windows 入口。

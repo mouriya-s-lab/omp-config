@@ -7,9 +7,11 @@
 (`README.md:1-3`). It holds only reviewable inputs: harness config, full and
 light system prompts, light-mode config and launcher source, custom subagent
 definitions, local TypeScript extensions, the agent-root
-`thinking-translator.json` for `omp-thinking-translator`, the plugin install
+`thinking-translator.json` for `omp-thinking-translator`, the `pi-bansos`
+plugin state (`pi/agent/pi-bansos-relay-state.json`), the plugin install
 list, and the maintenance commands that move state between this repo and a
-machine's live `~/.omp/agent` and install its PATH launcher. Runtime
+machine's live `~/.omp/agent` (plus `~/.pi/agent` for the `pi-bansos` state)
+and install its PATH launcher. Runtime
 state (databases, sessions, caches, credentials) is deliberately excluded.
 
 The repo is consumed by `omp` in two directions:
@@ -31,6 +33,7 @@ flowchart LR
     G["agent/agents/*.md"]
     E["agent/extensions/*.ts"]
     I["install-plugins.sh"]
+    B["pi/agent/pi-bansos-relay-state.json"]
   end
   subgraph machine["~/.omp/agent"]
     LA["config.yml / settings.json"]
@@ -40,9 +43,14 @@ flowchart LR
     LL["config-light.yml / APPEND_SYSTEM_LIGHT.md / omp-light.ts"]
     PL["~/.omp/plugins/"]
   end
+  subgraph pihome["~/.pi/agent"]
+    LB["pi-bansos-relay-state.json"]
+  end
   O["PATH directory beside resolved omp"]
   M["omp-light (POSIX) / omp-light.ts + .cmd (Windows)"]
   repo -->|"/update-omp"| machine
+  B -->|"/update-omp"| LB
+  LB -->|"/sync-omp-config (read-only src)"| B
   repo -->|"/update-omp: install entry"| O
   O --> M
   machine -->|"/sync-omp-config (read-only src)"| repo
@@ -58,13 +66,15 @@ flowchart LR
   `config.yml`; each is a default-exported function that registers tools/commands
   or subscribes to lifecycle events on the `ExtensionAPI` (`pi`).
 - **Two one-way syncs, never one "sync".** `/sync-omp-config` never writes the
-  machine; its sync range includes the three light assets and the agent-root
-  `thinking-translator.json` but excludes installed PATH launchers.
+  machine; its sync range includes the three light assets, the agent-root
+  `thinking-translator.json`, and `~/.pi/agent/pi-bansos-relay-state.json`, but
+  excludes installed PATH launchers.
   `/update-omp` writes the machine and installs `omp-light` beside the resolved
   `omp` executable (`.omp/commands/*.md`).
 - **Structured configs are managed in both directions, field by field.**
-  `config.yml`, `settings.json`, the agent-root `thinking-translator.json`, and
-  `extensions/lang-nag.json` are regular items of both commands: each side reads
+  `config.yml`, `settings.json`, the agent-root `thinking-translator.json`,
+  `extensions/lang-nag.json`, and `pi-bansos-relay-state.json` are regular items
+  of both commands: each side reads
   both files, diffs fields, and edits only the differing lines — never a
   whole-file overwrite or re-serialization. `config.yml`'s machine-local fields
   (listed in `.omp/commands/sync-omp-config.md`) are never carried either way.
@@ -83,6 +93,7 @@ flowchart LR
 | `agent/extensions/` | Local TypeScript extensions (the code core). 17 `.ts` (incl. `bro.ts`, the built-in-AI rewrite of the former `pi-bro` plugin, `watchdog-agent.ts`, `fork-task.ts`, which seeds native `task` children with a copy of the caller's conversation, and `task-split-check.ts`, which blocks main-agent `task` calls whose items cover more than one topic) + `doc-polish.json`/`lang-nag.json` sidecars (`lang-nag.json` is synced both ways; `doc-polish.json` is machine-local/prompt-overridable — see Important Files). |
 | `agent/agents/` | Custom subagent definitions (`*.md`) + `README.txt` authoring pitfalls. |
 | `agent/thinking-translator.json` | Agent-root translator config for `omp-thinking-translator`. Portable regular item: `/sync-omp-config` carries machine → repo, `/update-omp` carries repo → machine. |
+| `pi/agent/pi-bansos-relay-state.json` | `pi-bansos` plugin state (relay on/off, relay URL, saved relays, `statusBar`), read by the plugin from `~/.pi/agent/`, not `~/.omp/agent`. Written by the plugin's `/bansos` command; no credentials. Portable regular item in both directions. |
 | `.omp/commands/` | Project-level slash-command definitions run from repo root. |
 | repo root | `install-plugins.sh`, `plugin-audit.sh`, `README.md` (authoritative, in Chinese). |
 | `agent/config-light.yml`, `agent/APPEND_SYSTEM_LIGHT.md`, `agent/omp-light.ts` | Light-mode assets are included in both sync directions; `/update-omp` copies them to `~/.omp/agent` and installs the PATH entry beside the resolved `omp`. Generated `omp-light` / `omp-light.cmd` entries are not repo files. |
@@ -215,6 +226,12 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
   `omp-thinking-translator` at `~/.omp/agent`. Managed regular item in both
   directions (field-level diff and edit; validate with `bun -e` + `JSON.parse`). Unlike
   `agent/extensions/doc-polish.json` below, it is portable, not machine-local.
+- `pi/agent/pi-bansos-relay-state.json` — state file of the `pi-bansos` plugin
+  (`{enabled, url, relays, statusBar}`), which the plugin reads from and writes
+  to `~/.pi/agent/pi-bansos-relay-state.json` via `/bansos`. The status bar
+  `relay: ON/OFF` is shown by default; `statusBar: "hidden"` lives only in
+  this file, so a machine without it shows the entry again. Managed regular
+  item in both directions (field-level diff and edit; validate with `JSON.parse`).
 - `agent/extensions/doc-polish.json` — active config for `doc-polish.ts`
   (`splitModel`, `polishModel`, `concurrency`; `checkModel` optional, omitted
   here). Machine-local and prompt-overridable: `/update-omp` never touches an
@@ -244,6 +261,8 @@ cp agent/config.yml agent/settings.json agent/APPEND_SYSTEM.md \
   agent/config-light.yml agent/APPEND_SYSTEM_LIGHT.md agent/omp-light.ts \
   "$HOME/.omp/agent/"
 cp -a agent/agents agent/extensions "$HOME/.omp/agent/"
+mkdir -p "$HOME/.pi/agent"
+cp pi/agent/pi-bansos-relay-state.json "$HOME/.pi/agent/"
 ```
 
 The installed `omp-light` / `omp-light.cmd` entries are generated outputs, not
@@ -282,7 +301,7 @@ three light assets alone does not make `omp-light` resolvable.
 - **`plugin-audit.sh` validates the plugin *list*, not extension code** — it
   cannot prove anything about a `.ts` edit.
 - **How to validate a change here:**
-  1. `bun -e` parse check for any changed YAML/JSON (`config.yml`, `*.json`) — including `agent/thinking-translator.json` via `JSON.parse` on both sync and update paths.
+  1. `bun -e` parse check for any changed YAML/JSON (`config.yml`, `*.json`) — including `agent/thinking-translator.json` and `pi/agent/pi-bansos-relay-state.json` via `JSON.parse` on both sync and update paths.
   2. For an extension change, the only real proof is runtime: apply via
      `/update-omp` (or the `cp` set), **restart `omp`**, and exercise the actual
      tool/command/hook (e.g. run `ctx list`, `/polish-doc <file>`, trigger the
