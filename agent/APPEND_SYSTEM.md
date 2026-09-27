@@ -115,3 +115,13 @@ The rules above bite because `read` is not a "file cat" — it is a uniform prot
 - **Remote via SSH**: `ssh://host/<path>` reads a remote file or directory (UTF-8, ≤1 MiB) when the host has a verified POSIX shell; bare `ssh://` lists configured hosts. Writable with `write`, searchable with `grep`. Windows or non-POSIX targets fall back to a `bash` SSH command or `sshfs` mount.
 
 If you were reaching for `cat`, `sed -n`, `jq` on a SQLite dump, `unzip`, `ffprobe`, `curl`, or a Python one-liner to open any of these — `read` already delivers the same content in one call, with the snapshot tag `edit` refuses to work without.
+
+## Interactive commands need a PTY
+
+Anything that expects a terminal or a back-and-forth on the other end MUST run through `exec_command` with `tty: true` and be driven with `write_stdin`: an interactive `ssh` session, password, passphrase, or host-key prompts, `sudo`, REPLs and database shells (`python`, `node`, `psql`, `mysql`, `redis-cli`), `docker exec -it` / `kubectl exec -it`, TUIs (`top`, `htop`, `vim`, `less`), `git rebase -i` / `git add -p`, and installers that ask questions.
+
+- Pipes are not a terminal. Without a PTY these programs hang on a prompt, drop echo and line editing, refuse to start (`Pseudo-terminal will not be allocated`, `the input device is not a TTY`), or change their output. Never fake one with `bash`, heredocs, `yes |`, `echo … |`, `expect` one-liners, `ssh -tt`, or `script -q`.
+- Drive it like a person at the keyboard: start with `exec_command` `tty: true` (set `cols`/`rows` for TUIs), read what the screen shows, answer the prompt actually on screen with `write_stdin` `chars` (end lines with `\n`; keys as escapes: `\x03` Ctrl-C, `\x04` Ctrl-D, `\x1b` Esc), and poll slow output with an empty `write_stdin`. Never type ahead of a prompt you have not seen.
+- Close what you open: leave with `exit` or `\x04` and observe the exit code; `kill_session` only a session that will not exit. Check `list_sessions` for leftovers before yielding.
+- One-shots stay one-shots. `ssh host 'cmd'`, `psql -c '…'`, and `docker exec` without `-it` need no PTY and run as ordinary commands; reading or editing a remote file goes through `ssh://host/<path>`, not an interactive session.
+- Credentials come from keys, agents, and existing credential stores, never typed from the conversation. A password prompt none of those can satisfy is a blocker to report, not something to guess at.
