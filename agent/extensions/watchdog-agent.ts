@@ -34,23 +34,36 @@ import { basename, dirname, join, resolve } from "node:path";
 //   model:  anthropic/claude-sonnet-4-5:medium   # chat reviewer; else @advisor role
 //   tools:  [read, grep, glob]                   # optional; chat reviewer's tools
 //   judge:  typesafe/jev-latest                  # alternative native Jev backend
-//   note:   Recheck the latest work against the rule. # required with judge
+//   instructions: Judge only the latest work.    # optional Jev question text
+//   option.<label>: <criteria>                   # Jev choice option (>= 2); empty = name suffices
+//   option.<label>.prompt: <text>                # injected when Jev picks <label>; omit = silent
+//   option.<label>.delivery: steer               # optional per-option delivery override
 //   name:   Architecture                          # optional label
 //   enabled: true                                 # optional, default true
 //   delivery: aside                               # aside|steer|nextTurn|followUp
-//   maxPerContext: 6                              # optional safety cap
+//   maxPerContext: 6                              # optional safety cap (per watchdog)
+//   every:  30                                    # run after this many watched actions (default 30)
+//   scope:  full                                  # full (whole branch, default) | window (since own last run)
 // Body = review priorities for chat; judgment criterion for Jev. Jev evaluates
-// only the supplied transcript and triggers the author-written note; it has no
-// tools, free-form explanation, or implicit chat fallback.
+// only the supplied transcript and picks one configured option; the injected
+// text is that option's author-written prompt. Jev has no tools, free-form
+// explanation, or implicit chat fallback. Labels are lowercased (the frontmatter
+// parser lowercases keys) and each value is a single line.
 //
-// RUNTIME. On each settled agent turn (`agent_end`, non-continuation) in a
-// session whose identity matches a discovered watchdog, render a bounded tail
-// of the transcript. Chat reviewers use a tool-capable `createAgentSession` to
-// inspect and write findings. Native Jev uses `Judge.judge` on the transcript
-// and only selects pass/nit/concern/blocker; a non-pass choice triggers the
-// file author's prewritten `note`, never a fabricated model explanation.
-// Findings are injected into that session via `sendUserMessage`. Repeats are
-// de-duplicated and bounded per context so a stubborn model cannot loop.
+// RUNTIME. Every discovered watchdog matching the session identity runs
+// independently with its own counter, cursor, dedupe set and cap. The counter
+// accumulates the watched agent's actions: each assistant tool call and each
+// assistant text reply counts as one. When a watchdog's counter reaches
+// `every`, it runs immediately (mid-run), and its finding is injected as soon as
+// the review finishes, whatever state the agent is in. When the agent's run
+// settles (`agent_end`, non-continuation) with a nonzero counter below
+// `every`, the watchdog runs once for the remainder. `scope: full` reviews the
+// whole branch; `scope: window` reviews only messages after the watchdog's
+// previous run. The transcript is never truncated. Chat reviewers use a
+// tool-capable `createAgentSession`; native Jev uses `Judge.judge` and only
+// selects one configured option whose prewritten prompt (if any) is injected.
+// Findings go through `sendUserMessage`; repeats are de-duplicated and bounded
+// per watchdog per context so a stubborn model cannot loop.
 //
 // FAILURE POLICY. Every failure path (no match, unresolved model, judge
 // unavailable, reviewer error/timeout, malformed file) degrades to "no note".
@@ -94,10 +107,12 @@ const THINKING_SUFFIXES: Record<string, true> = {
 	max: true,
 };
 
-const TRANSCRIPT_BUDGET = 20_000; // chars of recent transcript handed to the reviewer.
-const PER_ENTRY_LIMIT = 1_000; // chars kept per transcript entry.
 const REVIEW_TIMEOUT_MS = 90_000; // hard cap on one reviewer run.
-const DEFAULT_MAX_PER_CONTEXT = 6; // advisories before going quiet until a context reset.
+const DEFAULT_MAX_PER_CONTEXT = 6; // advisories per watchdog before going quiet until a context reset.
+const DEFAULT_EVERY = 30; // watched actions (tool calls + text replies) between runs.
+
+/** Which messages a run reviews: the whole branch, or only those after the watchdog's previous run. */
+type Scope = "full" | "window";
 
 type DeliverAs = "aside" | "steer" | "nextTurn" | "followUp";
 
@@ -108,6 +123,8 @@ type WatchdogBase = {
 	readonly targets: readonly string[];
 	readonly delivery: DeliverAs;
 	readonly maxPerContext: number;
+	readonly every: number;
+	readonly scope: Scope;
 	readonly guidance: string;
 	readonly filePath: string;
 };
@@ -118,25 +135,38 @@ type ChatWatchdog = WatchdogBase & {
 	readonly tools: readonly string[];
 };
 
+/** What happens when Jev picks an option: stay quiet, or inject the author's prompt. */
+type JevOutcome =
+	| { readonly kind: "silent" }
+	| { readonly kind: "inject"; readonly prompt: string; readonly delivery: DeliverAs };
+
+type JevOption = {
+	readonly label: string;
+	/** Rubric handed to Jev; null when the label alone is self-explanatory. */
+	readonly criteria: string | null;
+	readonly outcome: JevOutcome;
+};
+
 type JevWatchdog = WatchdogBase & {
 	readonly kind: "jev";
 	readonly judge: { readonly provider: string; readonly modelId: string };
-	readonly note: string;
+	readonly instructions: string;
+	readonly options: readonly JevOption[];
 };
 
 type WatchdogSpec = ChatWatchdog | JevWatchdog;
 
 type Verdict =
 	| { readonly kind: "pass" }
-	| { readonly kind: "advice"; readonly severity: "nit" | "concern" | "blocker"; readonly note: string };
+	| { readonly kind: "advice"; readonly severity: string; readonly note: string; readonly delivery: DeliverAs };
+
+const DEFAULT_JEV_INSTRUCTIONS =
+	"Judge only the latest work in the supplied transcript against the configured guidance. Do not infer facts outside the supplied transcript.";
+const JEV_OPTION_KEY = /^option\.([a-z0-9_-]+)(?:\.(prompt|delivery))?$/;
 
 /** Checked keyed access without an unchecked cast. */
 function hasKey<K extends string>(value: unknown, key: K): value is Record<K, unknown> {
 	return typeof value === "object" && value !== null && key in value;
-}
-
-function trunc(s: string, n: number): string {
-	return s.length <= n ? s : `${s.slice(0, n)}…`;
 }
 
 // --- discovery + parsing ----------------------------------------------------
@@ -224,7 +254,7 @@ function parseWatchdogFile(path: string, warn?: (message: string) => void): Watc
 	const rawTools = fields.tools ? toList(fields.tools) : [...DEFAULT_TOOLS];
 	const tools = rawTools.map(t => t.toLowerCase()).filter(t => GRANTABLE_TOOLS[t] === true);
 	const delivery = normalizeDelivery(fields.delivery);
-	const maxPerContext = normalizeCap(fields.maxpercontext);
+	const maxPerContext = parsePositiveInt(fields.maxpercontext, DEFAULT_MAX_PER_CONTEXT);
 	const fallbackName = basename(path).replace(/^WATCHDOG-/i, "").replace(/\.md$/i, "");
 
 	const common: WatchdogBase = {
@@ -232,22 +262,31 @@ function parseWatchdogFile(path: string, warn?: (message: string) => void): Watc
 		targets,
 		delivery,
 		maxPerContext,
+		every: parsePositiveInt(fields.every, DEFAULT_EVERY),
+		scope: normalizeScope(fields.scope),
 		guidance: body.trim(),
 		filePath: path,
 	};
 	if (fields.judge !== undefined) {
 		const judge = unquote(fields.judge);
 		const slash = judge.indexOf("/");
-		if (fields.model !== undefined || fields.tools !== undefined || !common.guidance || !unquote(fields.note ?? "") ||
-			slash <= 0 || slash === judge.length - 1 || THINKING_SUFFIXES[judge.slice(judge.lastIndexOf(":") + 1).toLowerCase()] === true) {
-			warn?.(`watchdog "${path}": judge requires provider/model, a nonempty body and note; model, tools and thinking suffixes are not allowed`);
+		const reject = (reason: string): null => {
+			warn?.(`watchdog "${path}": ${reason}`);
 			return null;
+		};
+		if (fields.model !== undefined || fields.tools !== undefined || fields.note !== undefined || !common.guidance ||
+			slash <= 0 || slash === judge.length - 1 || THINKING_SUFFIXES[judge.slice(judge.lastIndexOf(":") + 1).toLowerCase()] === true) {
+			return reject("judge requires provider/model and a nonempty body; model, tools, note and thinking suffixes are not allowed");
 		}
+		const parsed = parseJevOptions(fields, delivery);
+		if (parsed.kind === "invalid") return reject(parsed.reason);
+		const instructions = unquote(fields.instructions ?? "");
 		return {
 			...common,
 			kind: "jev",
 			judge: { provider: judge.slice(0, slash), modelId: judge.slice(slash + 1) },
-			note: unquote(fields.note ?? ""),
+			instructions: instructions || DEFAULT_JEV_INSTRUCTIONS,
+			options: parsed.options,
 		};
 	}
 	return {
@@ -256,6 +295,56 @@ function parseWatchdogFile(path: string, warn?: (message: string) => void): Watc
 		model: fields.model ? unquote(fields.model) : undefined,
 		tools: tools.length > 0 ? tools : [...DEFAULT_TOOLS],
 	};
+}
+
+type JevOptionsParse =
+	| { readonly kind: "ok"; readonly options: readonly JevOption[] }
+	| { readonly kind: "invalid"; readonly reason: string };
+
+/** Collect flat `option.<label>[.prompt|.delivery]` keys into Jev options. */
+function parseJevOptions(fields: Record<string, string>, defaultDelivery: DeliverAs): JevOptionsParse {
+	const criteria = new Map<string, string | null>();
+	const prompts = new Map<string, string>();
+	const deliveries = new Map<string, DeliverAs>();
+	for (const [key, raw] of Object.entries(fields)) {
+		if (!key.startsWith("option.")) continue;
+		const m = key.match(JEV_OPTION_KEY);
+		if (!m) return { kind: "invalid", reason: `unsupported option key "${key}" (use option.<label>, option.<label>.prompt, option.<label>.delivery)` };
+		const [, label, part] = m;
+		const value = unquote(raw);
+		switch (part) {
+			case undefined:
+				criteria.set(label, value || null);
+				break;
+			case "prompt":
+				if (!value) return { kind: "invalid", reason: `option.${label}.prompt is empty (omit it for a silent option)` };
+				prompts.set(label, value);
+				break;
+			case "delivery":
+				deliveries.set(label, normalizeDelivery(value));
+				break;
+		}
+	}
+	for (const label of [...prompts.keys(), ...deliveries.keys()]) {
+		if (!criteria.has(label)) return { kind: "invalid", reason: `option.${label} is not declared (add option.${label}: <criteria>)` };
+	}
+	for (const label of deliveries.keys()) {
+		if (!prompts.has(label)) return { kind: "invalid", reason: `option.${label}.delivery set on a silent option` };
+	}
+	if (criteria.size < 2) return { kind: "invalid", reason: "judge requires at least two option.<label> entries" };
+	if (prompts.size === 0) return { kind: "invalid", reason: "judge requires at least one option.<label>.prompt" };
+	const options: JevOption[] = [];
+	for (const [label, rubric] of criteria) {
+		const prompt = prompts.get(label);
+		options.push({
+			label,
+			criteria: rubric,
+			outcome: prompt === undefined
+				? { kind: "silent" }
+				: { kind: "inject", prompt, delivery: deliveries.get(label) ?? defaultDelivery },
+		});
+	}
+	return { kind: "ok", options };
 }
 
 function normalizeDelivery(value: string | undefined): DeliverAs {
@@ -271,9 +360,13 @@ function normalizeDelivery(value: string | undefined): DeliverAs {
 	}
 }
 
-function normalizeCap(value: string | undefined): number {
+function parsePositiveInt(value: string | undefined, fallback: number): number {
 	const n = Number.parseInt(unquote(value ?? ""), 10);
-	return Number.isFinite(n) && n > 0 ? n : DEFAULT_MAX_PER_CONTEXT;
+	return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+function normalizeScope(value: string | undefined): Scope {
+	return unquote(value ?? "").toLowerCase() === "window" ? "window" : "full";
 }
 
 // --- identity + matching ----------------------------------------------------
@@ -343,10 +436,10 @@ function toolCallSummaries(content: unknown): string[] {
 				: hasKey(b, "name") && typeof b.name === "string"
 					? b.name
 					: "tool";
-		const rawArgs = hasKey(b, "args") ? b.args : hasKey(b, "input") ? b.input : undefined;
+		const rawArgs = hasKey(b, "args") ? b.args : hasKey(b, "arguments") ? b.arguments : hasKey(b, "input") ? b.input : undefined;
 		let args = "";
 		try {
-			args = rawArgs === undefined ? "" : trunc(JSON.stringify(rawArgs), 200);
+			args = rawArgs === undefined ? "" : JSON.stringify(rawArgs);
 		} catch {
 			args = "";
 		}
@@ -355,65 +448,75 @@ function toolCallSummaries(content: unknown): string[] {
 	return calls;
 }
 
-/** Number of real (non-advisory) message entries — the "has new work?" signal. */
-function countableEntries(entries: ReadonlyArray<unknown>): number {
-	let n = 0;
-	for (const e of entries) {
-		if (!hasKey(e, "type") || e.type !== "message") continue;
-		const m = hasKey(e, "message") ? e.message : undefined;
-		if (!hasKey(m, "role") || typeof m.role !== "string") continue;
-		if (m.role === "user" && textBlocks(hasKey(m, "content") ? m.content : undefined).trimStart().startsWith(ADVISORY_TAG)) continue;
-		if (m.role === "user" || m.role === "assistant" || m.role === "toolResult" || m.role === "developer") n++;
-	}
-	return n;
+/** Watched actions in one message: each assistant tool call plus one for a nonempty text reply. */
+function countActions(message: unknown): number {
+	if (!hasKey(message, "role") || message.role !== "assistant") return 0;
+	const content = hasKey(message, "content") ? message.content : undefined;
+	return toolCallSummaries(content).length + (textBlocks(content).trim() === "" ? 0 : 1);
 }
 
-/** One entry's compact rendering, or undefined when it contributes nothing (incl. our own advisories). */
-function renderEntry(e: unknown): string | undefined {
-	if (!hasKey(e, "type") || e.type !== "message") return undefined;
-	const m = hasKey(e, "message") ? e.message : undefined;
+function messageTimestamp(message: unknown): number | undefined {
+	return hasKey(message, "timestamp") && typeof message.timestamp === "number" ? message.timestamp : undefined;
+}
+
+/** One message's full rendering, or undefined when it contributes nothing (incl. our own advisories). */
+function renderMessage(m: unknown): string | undefined {
 	if (!hasKey(m, "role") || typeof m.role !== "string") return undefined;
 	const role = m.role;
 	const content = hasKey(m, "content") ? m.content : undefined;
 	if (role === "assistant") {
 		const text = textBlocks(content).trim();
-		const calls = toolCallSummaries(content);
 		const segs: string[] = [];
-		if (text) segs.push(`ASSISTANT: ${trunc(text, PER_ENTRY_LIMIT)}`);
-		for (const c of calls) segs.push(`  → tool ${trunc(c, PER_ENTRY_LIMIT)}`);
+		if (text) segs.push(`ASSISTANT: ${text}`);
+		for (const c of toolCallSummaries(content)) segs.push(`  → tool ${c}`);
 		return segs.length > 0 ? segs.join("\n") : undefined;
 	}
 	if (role === "user") {
 		const text = textBlocks(content).trim();
 		if (text.startsWith(ADVISORY_TAG)) return undefined; // skip our own advisory injections
-		return text ? `USER: ${trunc(text, PER_ENTRY_LIMIT)}` : undefined;
+		return text ? `USER: ${text}` : undefined;
 	}
 	if (role === "toolResult") {
 		const name = hasKey(m, "toolName") && typeof m.toolName === "string" ? m.toolName : "tool";
-		return `RESULT[${name}]: ${trunc(textBlocks(content).trim(), PER_ENTRY_LIMIT)}`;
+		return `RESULT[${name}]: ${textBlocks(content).trim()}`;
 	}
 	if (role === "developer") {
 		const text = textBlocks(content).trim();
-		return text ? `DEV: ${trunc(text, PER_ENTRY_LIMIT)}` : undefined;
+		return text ? `DEV: ${text}` : undefined;
 	}
 	return undefined;
 }
 
-/**
- * Bounded tail of the transcript, rendered compactly, excluding our own advisories.
- * Walks from the newest entry and stops once the budget is full, so per-turn cost
- * tracks the budget rather than the whole branch.
- */
-function renderTranscript(entries: ReadonlyArray<unknown>, budget: number): string {
-	let out = "";
-	for (let i = entries.length - 1; i >= 0; i--) {
-		const part = renderEntry(entries[i]);
-		if (part === undefined) continue;
-		const next = out ? `${part}\n${out}` : part;
-		if (next.length > budget && out !== "") break;
-		out = next;
+/** Messages on the branch, oldest first; non-message entries (compaction markers, labels, …) are skipped. */
+function branchMessages(entries: ReadonlyArray<unknown>): unknown[] {
+	const out: unknown[] = [];
+	for (const e of entries) {
+		if (hasKey(e, "type") && e.type === "message" && hasKey(e, "message")) out.push(e.message);
 	}
 	return out;
+}
+
+/**
+ * Messages a run reviews. `full` = every branch message; `window` = those stamped after
+ * `after`. `tail` is the message that triggered a mid-run review: `message_end` persistence
+ * is queued concurrently with the event, so it is appended when the branch lacks it yet.
+ */
+function selectMessages(entries: ReadonlyArray<unknown>, scope: Scope, after: number, tail: unknown): unknown[] {
+	const all = branchMessages(entries);
+	const tailStamp = messageTimestamp(tail);
+	if (tail !== undefined && tailStamp !== undefined && !all.some(m => messageTimestamp(m) === tailStamp)) all.push(tail);
+	if (scope === "full") return all;
+	return all.filter(m => (messageTimestamp(m) ?? 0) > after);
+}
+
+/** Full, untruncated rendering of the given messages, oldest first. */
+function renderTranscript(messages: ReadonlyArray<unknown>): string {
+	const parts: string[] = [];
+	for (const m of messages) {
+		const part = renderMessage(m);
+		if (part !== undefined) parts.push(part);
+	}
+	return parts.join("\n");
 }
 
 // --- reviewer ---------------------------------------------------------------
@@ -456,7 +559,7 @@ function buildReviewPrompt(guidance: string, transcript: string): string {
 		`You are NOT the primary agent; do not perform its task.\n\n` +
 		`Your review priorities:\n${guidance || "(no specific priorities configured; apply general senior-engineer judgment)"}\n\n` +
 		`You may use your read-only tools to inspect the workspace and verify a concern before raising it. Investigate briefly; never rewrite the code.\n\n` +
-		`Below is the recent transcript of the primary agent (oldest first, newest last). Judge only whether the LATEST work has a problem worth flagging.\n\n` +
+		`Below is the primary agent's transcript (oldest first, newest last). Judge only whether the LATEST work has a problem worth flagging.\n\n` +
 		`Reply format — obey EXACTLY:\n` +
 		`- If nothing is worth flagging, reply with the single word: PASS\n` +
 		`- Otherwise reply with two lines:\n` +
@@ -467,16 +570,16 @@ function buildReviewPrompt(guidance: string, transcript: string): string {
 	);
 }
 
-function interpretVerdict(answer: string): Verdict | null {
+function interpretVerdict(answer: string, delivery: DeliverAs): Verdict | null {
 	const trimmed = answer.trim();
 	if (trimmed === "") return null;
 	const firstLine = trimmed.split(/\r?\n/, 1)[0]?.trim() ?? "";
 	if (/^(pass|ok|lgtm|none)\b/i.test(firstLine)) return { kind: "pass" };
 	const sev = trimmed.match(/severity\s*:\s*(nit|concern|blocker)/i);
-	const severity = (sev ? sev[1].toLowerCase() : "concern") as "nit" | "concern" | "blocker";
+	const severity = sev ? sev[1].toLowerCase() : "concern";
 	let note = trimmed.replace(/^\s*severity\s*:\s*(nit|concern|blocker)\s*/i, "").trim();
 	if (note === "") note = trimmed;
-	return { kind: "advice", severity, note };
+	return { kind: "advice", severity, note, delivery };
 }
 
 async function withTimeout(ctx: ExtensionContext, work: Promise<unknown>, ms: number): Promise<void> {
@@ -548,7 +651,7 @@ async function runReviewer(pi: ExtensionAPI, ctx: ExtensionContext, spec: ChatWa
 		if (hasKey(m, "stopReason") && m.stopReason === "error") return null; // provider failure ≠ verdict
 		break;
 	}
-	return interpretVerdict(deltas.trim() || lastAssistantText(finalMessages));
+	return interpretVerdict(deltas.trim() || lastAssistantText(finalMessages), spec.delivery);
 }
 
 function lastAssistantText(messages: unknown): string {
@@ -562,9 +665,11 @@ function lastAssistantText(messages: unknown): string {
 	return "";
 }
 
-/** Native Jev answers a typed choice, not a chat message. The configured note is authored by the watchdog file. */
+/** Native Jev answers a typed choice, not a chat message. The injected text is the chosen option's author-written prompt. */
 async function runJev(pi: ExtensionAPI, ctx: ExtensionContext, spec: JevWatchdog, transcript: string): Promise<Verdict | null> {
-	const model = ctx.modelRegistry.getAvailable("judge").find(
+	// Match by judgment API, not catalog kind: a custom `models.yml` provider declared with
+	// `api: typesafe` keeps the default `chat` kind unless the provider is named `typesafe`.
+	const model = ctx.modelRegistry.getAvailable("all").find(
 		candidate => candidate.provider === spec.judge.provider && candidate.id === spec.judge.modelId,
 	);
 	if (!model || !isJudgmentApi(model.api)) {
@@ -588,20 +693,11 @@ async function runJev(pi: ExtensionAPI, ctx: ExtensionContext, spec: JevWatchdog
 			baseUrl: model.baseUrl,
 			headers,
 		});
+		const criteria: Record<string, string | null> = {};
+		for (const option of spec.options) criteria[option.label] = option.criteria;
 		const result = await judge.judge({
 			state: { guidance: spec.guidance, transcript },
-			questions: {
-				review: {
-					type: "choice",
-					instructions: "Judge only the latest work in the supplied transcript against the configured guidance. Choose pass when the evidence is insufficient; otherwise choose the most appropriate severity. Do not infer facts outside the supplied transcript.",
-					criteria: {
-						pass: "No clear violation of the configured guidance in the latest work.",
-						nit: "A concrete, minor violation of the configured guidance.",
-						concern: "A concrete, substantive violation requiring correction.",
-						blocker: "A clear, high-risk violation preventing acceptance.",
-					},
-				},
-			},
+			questions: { review: { type: "choice", instructions: spec.instructions, criteria } },
 		}, { signal });
 		if (result.usage.cost.total === 0) calculateCost(model, result.usage);
 		pi.logger?.info?.(`watchdog "${spec.name}": native judge usage`, {
@@ -611,19 +707,17 @@ async function runJev(pi: ExtensionAPI, ctx: ExtensionContext, spec: JevWatchdog
 			output: result.usage.output,
 			cost: result.usage.cost.total,
 		});
-		switch (result.answers.review.choice) {
-			case "pass": return { kind: "pass" };
-			case "nit":
-			case "concern":
-			case "blocker":
-				return {
-					kind: "advice",
-					severity: result.answers.review.choice,
-					note: `Native Jev triggered configured watchdog guidance (no Jev-authored explanation or independent tool use): ${spec.note}`,
-				};
-			default:
-				pi.logger?.warn?.(`watchdog "${spec.name}": native judge returned an unsupported choice — skipping`);
-				return null;
+		const choice = result.answers.review.choice;
+		const picked = spec.options.find(option => option.label === choice);
+		if (!picked) {
+			pi.logger?.warn?.(`watchdog "${spec.name}": native judge returned an unconfigured choice — skipping`);
+			return null;
+		}
+		switch (picked.outcome.kind) {
+			case "silent":
+				return { kind: "pass" };
+			case "inject":
+				return { kind: "advice", severity: picked.label, note: picked.outcome.prompt, delivery: picked.outcome.delivery };
 		}
 	} catch (error) {
 		pi.logger?.warn?.(`watchdog "${spec.name}": native judge failed — skipping`, {
@@ -639,96 +733,117 @@ function normalizeNote(note: string): string {
 
 // --- extension registration -------------------------------------------------
 
+type RunState = { readonly kind: "idle" } | { readonly kind: "running"; readonly flushAfter: boolean };
+
+/** Per-watchdog runtime state; each watchdog counts, runs, dedupes and caps on its own. */
+type WatchdogState = {
+	readonly spec: WatchdogSpec;
+	/** Watched actions since this watchdog's last run started. */
+	pending: number;
+	/** Newest message timestamp covered by the last run (`window` scope cursor). */
+	cursor: number;
+	run: RunState;
+	sent: number;
+	readonly notes: Set<string>;
+};
+
 export default function watchdogAgent(pi: ExtensionAPI): void {
 	let identified = false;
 	let specs: WatchdogSpec[] = [];
-	let lastReviewedCount = 0;
-	let advisoriesSent = 0;
-	let capTotal = DEFAULT_MAX_PER_CONTEXT;
-	let exhausted = false;
-	let reviewing = false;
-	const sentNotes = new Set<string>();
+	let states: WatchdogState[] = [];
 
-	const resetCounters = (): void => {
-		lastReviewedCount = 0;
-		advisoriesSent = 0;
-		exhausted = false;
-		reviewing = false;
-		sentNotes.clear();
+	const resetStates = (): void => {
+		states = specs.map((spec): WatchdogState => ({ spec, pending: 0, cursor: 0, run: { kind: "idle" }, sent: 0, notes: new Set<string>() }));
 	};
 
 	const configure = (ctx: ExtensionContext): void => {
 		const identity = resolveIdentity(ctx);
 		identified = identity !== null;
-		if (!identity) {
-			specs = [];
-			return;
-		}
 		const matched: WatchdogSpec[] = [];
-		for (const file of discoverWatchdogFiles(ctx.cwd)) {
-			const spec = parseWatchdogFile(file, message => pi.logger?.warn?.(message));
-			if (spec && matchesIdentity(spec, identity)) matched.push(spec);
+		if (identity) {
+			for (const file of discoverWatchdogFiles(ctx.cwd)) {
+				const spec = parseWatchdogFile(file, message => pi.logger?.warn?.(message));
+				if (spec && matchesIdentity(spec, identity)) matched.push(spec);
+			}
 		}
 		specs = matched;
-		capTotal = matched.reduce((max, s) => Math.max(max, s.maxPerContext), DEFAULT_MAX_PER_CONTEXT);
-		if (matched.length > 0) {
+		resetStates();
+		if (identity && matched.length > 0) {
 			const who = identity.kind === "main" ? "main" : `subagent "${identity.agent}"`;
-			pi.logger?.info?.(`watchdog: ${matched.length} watchdog(s) active for ${who} — ${matched.map(s => s.name).join(", ")}`);
+			pi.logger?.info?.(`watchdog: ${matched.length} watchdog(s) active for ${who} — ${matched.map(s => `${s.name}(every=${s.every}, scope=${s.scope})`).join(", ")}`);
 		}
 	};
 
-	pi.on("session_start", (_event, ctx) => {
-		resetCounters();
-		configure(ctx);
-	});
-	pi.on("session_switch", (_event, ctx) => {
-		resetCounters();
-		configure(ctx);
-	});
-	// Boundaries that rewrite the working transcript invalidate the review cursor + budget.
-	pi.on("session_branch", () => resetCounters());
-	pi.on("session_tree", () => resetCounters());
-	pi.on("session_compact", () => resetCounters());
+	const deliver = (state: WatchdogState, verdict: Verdict | null): void => {
+		if (!verdict || verdict.kind !== "advice") return;
+		const spec = state.spec;
+		const key = normalizeNote(verdict.note);
+		if (key === "" || state.notes.has(key) || state.sent >= spec.maxPerContext) return;
+		state.notes.add(key);
+		const safeName = spec.name.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+		const text = `<watchdog name="${safeName}" severity="${verdict.severity}">\n${verdict.note}\n</watchdog>`;
+		pi.sendUserMessage(text, { deliverAs: verdict.delivery, attribution: "agent" });
+		state.sent += 1;
+		pi.logger?.info?.(`watchdog "${spec.name}": ${verdict.severity} → delivered (${state.sent}/${spec.maxPerContext})`);
+	};
 
-	pi.on("agent_end", async (event, ctx) => {
-		// A session that had no file at start (identity unknown) is retried once, lazily.
+	/** Start one review now; never awaited by the caller, so the watched agent keeps running. */
+	const start = (state: WatchdogState, ctx: ExtensionContext, tail: unknown): void => {
+		const spec = state.spec;
+		state.pending = 0;
+		if (state.sent >= spec.maxPerContext) return;
+		const messages = selectMessages(ctx.sessionManager.getBranch(), spec.scope, state.cursor, tail);
+		for (const m of messages) state.cursor = Math.max(state.cursor, messageTimestamp(m) ?? 0);
+		const transcript = renderTranscript(messages);
+		if (transcript.trim() === "") return;
+		state.run = { kind: "running", flushAfter: false };
+		const review = spec.kind === "jev" ? runJev(pi, ctx, spec, transcript) : runReviewer(pi, ctx, spec, transcript);
+		void review.then(
+			verdict => {
+				// A context reset or session switch replaced the roster; drop the stale finding.
+				if (!states.includes(state)) return;
+				deliver(state, verdict);
+			},
+			() => undefined,
+		).finally(() => {
+			if (!states.includes(state)) return;
+			const flush = state.run.kind === "running" && state.run.flushAfter;
+			state.run = { kind: "idle" };
+			if (state.pending >= spec.every || (flush && state.pending > 0)) start(state, ctx, undefined);
+		});
+	};
+
+	pi.on("session_start", (_event, ctx) => configure(ctx));
+	pi.on("session_switch", (_event, ctx) => configure(ctx));
+	// Boundaries that rewrite the working transcript invalidate every cursor, counter and cap.
+	pi.on("session_branch", () => resetStates());
+	pi.on("session_tree", () => resetStates());
+	pi.on("session_compact", () => resetStates());
+
+	pi.on("message_end", (event, ctx) => {
+		// A session that had no file at start (identity unknown) is retried lazily.
 		if (!identified) configure(ctx);
-		if (specs.length === 0 || exhausted || reviewing) return;
-		if (event.willContinue === true) return; // auto-continuation, not a settled turn.
+		const actions = countActions(event.message);
+		if (actions === 0) return;
+		for (const state of states) {
+			state.pending += actions;
+			if (state.run.kind === "idle" && state.pending >= state.spec.every) start(state, ctx, event.message);
+		}
+	});
 
-		const entries = ctx.sessionManager.getBranch();
-		const count = countableEntries(entries);
-		if (count <= lastReviewedCount) return; // no new primary work since last review.
-
-		reviewing = true;
-		try {
-			lastReviewedCount = count;
-			const transcript = renderTranscript(entries, TRANSCRIPT_BUDGET);
-			if (transcript.trim() === "") return;
-			for (const spec of specs) {
-				if (exhausted) break;
-				const verdict = spec.kind === "jev"
-					? await runJev(pi, ctx, spec, transcript)
-					: await runReviewer(pi, ctx, spec, transcript);
-				if (!verdict || verdict.kind !== "advice") continue;
-				const key = normalizeNote(verdict.note);
-				if (key === "" || sentNotes.has(key)) continue;
-				sentNotes.add(key);
-				const safeName = spec.name.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-				const text = `<watchdog name="${safeName}" severity="${verdict.severity}">\n${verdict.note}\n</watchdog>`;
-				pi.sendUserMessage(text, { deliverAs: spec.delivery, attribution: "agent" });
-				pi.logger?.info?.(`watchdog "${spec.name}": ${verdict.severity} → delivered (${advisoriesSent + 1}/${capTotal})`);
-				advisoriesSent += 1;
-				if (advisoriesSent >= capTotal) exhausted = true;
-			}
-		} finally {
-			reviewing = false;
+	pi.on("agent_end", (event, ctx) => {
+		if (!identified) configure(ctx);
+		if (event.willContinue === true) return; // auto-continuation, not a settled run.
+		for (const state of states) {
+			if (state.pending === 0) continue;
+			if (state.run.kind === "idle") start(state, ctx, undefined);
+			else state.run = { kind: "running", flushAfter: true };
 		}
 	});
 }
 
 // Pure-logic seam for out-of-harness verification (mirrors lang-nag's __testables).
-// The model-calling path (runReviewer) still requires a live session and is not exposed.
+// The model-calling paths (runReviewer, runJev) still require a live session and are not exposed.
 export function __testables() {
 	return {
 		parseFrontmatter,
@@ -736,11 +851,13 @@ export function __testables() {
 		toList,
 		matchesIdentity,
 		interpretVerdict,
+		countActions,
+		selectMessages,
 		renderTranscript,
-		countableEntries,
 		splitEffort,
 		normalizeDelivery,
-		normalizeCap,
+		parsePositiveInt,
+		normalizeScope,
 		normalizeNote,
 		discoverWatchdogFiles,
 	};

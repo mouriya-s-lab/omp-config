@@ -276,21 +276,34 @@ shake 按 OMP 18.3.1 手动 `/shake` 的配置（`AGGRESSIVE_SHAKE_CONFIG`）：
 
 **`watchdog-agent.ts`**：按目标投放的 watchdog，由 `WATCHDOG-<标签>.md` 驱动。原生 advisor 发现的 `WATCHDOG.md` / `WATCHDOG.yml` 会推给所有被顾问的会话，没法只投给某个目标，ExtensionAPI 也没有钩子能介入，所以本扩展自带运行路径。它不接管原生 `WATCHDOG.md`。
 
-文件放在 `~/.omp/agent/WATCHDOG-*.md`，或从 cwd 到 git root 每层的 `<dir>/WATCHDOG-*.md`、`<dir>/.omp/WATCHDOG-*.md`。frontmatter：
+文件放在 `~/.omp/agent/WATCHDOG-*.md`，或从 cwd 到 git root 每层的 `<dir>/WATCHDOG-*.md`、`<dir>/.omp/WATCHDOG-*.md`。每个文件是一个独立的 watchdog，可以同时有多个，各自计数、各自运行、各自去重封顶。frontmatter：
 
 |字段|说明|
 |---|---|
 |`target`（必填）|`main`、agent 名（如 `task:low`）、`*`、`subagents`，或逗号分隔列表|
 |`name`、`enabled`|`enabled` 默认 `true`|
 |`delivery`|`aside`（默认）、`steer`、`nextTurn`、`followUp`|
-|`maxPerContext`|每个 context 最多提醒次数，默认 6|
+|`maxPerContext`|本 watchdog 每个 context 最多提醒次数，默认 6|
+|`every`|被观察的 agent 累计多少条操作（每个工具调用算 1 条，每条非空文字回复算 1 条）后跑一次，默认 30|
+|`scope`|`full`（默认，看整条分支的全量上下文）或 `window`（只看本 watchdog 上次运行之后的新消息）|
 |`model`、`tools`|聊天 reviewer 后端用，见下|
-|`judge`、`note`|Jev 后端用，见下|
+|`judge`、`instructions`、`option.*`|Jev 后端用，见下|
 
 两种后端二选一：
 
 - **聊天 reviewer**（默认）：`model` 可带 `:effort`，缺省用 `@advisor` 角色，再退到会话模型。`tools` 默认 `read` / `grep` / `glob`，只接受 read、grep、glob、ast_grep、web_search、edit、write、bash、eval。正文是审阅重点。reviewer 可以检查工作区，返回 `PASS` 或带严重度的问题说明。
-- **Jev 判定**：`judge: typesafe/jev-latest` 或 `openrouter/~typesafe/jev-latest`，必须同时写非空 `note` 和正文；不能与 `model`、`tools` 或 effort 后缀同用，否则跳过该文件并记 warning。Jev 只看最近的 transcript 和正文准则，回答 `pass` / `nit` / `concern` / `blocker` 之一，不调工具、不写解释；不是 `pass` 时发出预写的 `note`，并标明是 Jev 触发的。只用原生 judgment 模型（不会把同名 chat 模型当成 Jev），不可用、鉴权失败、响应无效或超时就不提醒，不当作通过，也不退回聊天 reviewer。
+- **Jev 判定**：`judge: <provider>/<model>`，指向 `api` 为 `typesafe` 或 `openrouter-decisions` 的模型，例如内置的 `typesafe/jev-latest`、`openrouter/~typesafe/jev-latest`，或在 `models.yml` 里自定义的 provider（`baseUrl` 指向兼容 `POST /v1/systemone` 的根地址，`api: typesafe`）。必须同时写正文；不能与 `model`、`tools`、`note` 或 effort 后缀同用，否则跳过该文件并记 warning。Jev 只看按 `scope` 选出的 transcript 和正文准则，从作者声明的选项里选一个，不调工具、不写解释；注入的文字是该选项预写的 prompt。按 judgment API 认模型，不按目录 kind（自定义 provider 的 kind 默认为 chat），也不会把 chat API 的同名模型当成 Jev；模型不可用、鉴权失败、响应无效、选了未声明的选项或超时就不提醒，不当作通过，也不退回聊天 reviewer。
+
+Jev 选项用扁平键声明（frontmatter 解析器把键转成小写，所以标签只能是小写字母、数字、`_`、`-`；每个值占一行）：
+
+|键|说明|
+|---|---|
+|`instructions`|可选，交给 Jev 的判定说明；缺省为“只按正文准则判断 transcript 里最近的工作，不推断 transcript 以外的事实”|
+|`option.<标签>`|声明一个选项，值是交给 Jev 的判定标准；留空表示标签本身已足够说明。至少两个|
+|`option.<标签>.prompt`|Jev 选中该选项时注入的文字；不写就是静默选项（相当于通过）。至少一个选项要有|
+|`option.<标签>.delivery`|可选，覆盖该选项的投放方式，取值同 `delivery`；只能用于有 prompt 的选项|
+
+注入标签是 `<watchdog name=… severity=<选中的标签>>`。未知的 `option.*` 键、只写了 prompt/delivery 却没声明的选项、空 prompt 都会让整个文件被跳过并记 warning。
 
 示例 `~/.omp/agent/WATCHDOG-Evidence.md`：
 
@@ -298,17 +311,25 @@ shake 按 OMP 18.3.1 手动 `/shake` 的配置（`AGGRESSIVE_SHAKE_CONFIG`）：
 ---
 target: main
 judge: typesafe/jev-latest
-note: 请重新核对最新结论的运行时证据。
 delivery: aside
+option.pass: 最近的工作没有宣称已验证，或宣称时附了实际运行输出；证据不足时也选这个。
+option.concern: 最近的工作宣称已验证，但没有给出实际运行时证据。
+option.concern.prompt: 你最近宣称已验证，但 transcript 里没有运行时证据。补跑真实入口并贴出命令和输出；做不到就明确写“已改，未完成 runtime 验证”。
+option.blocker: 最近的工作在没有任何运行的情况下宣布任务完成并交付。
+option.blocker.prompt: 停止交付。你在没有运行验证的情况下宣布完成，这不算完成。先跑真实路径并给出证据，再重新报告。
+option.blocker.delivery: steer
 ---
 仅当最近的工作宣称代码已验证、却没有给出实际运行时证据时标记违例。
 ```
 
 运行方式：
 
-- 每个结束的轮次（`agent_end` 且不是 `willContinue`）取有限长度的最近 transcript（不含自己注入的 `<watchdog>` 消息）去判断，不通过时以 `<watchdog name=… severity=…>` 注入匹配的会话。
+- 每条 assistant 消息结束时累加该 watchdog 的计数。计数达到 `every` 就立即运行，不等本轮结束；运行期间 agent 照常工作，运行结束后不管 agent 处于什么状态都立即按 `delivery` 注入。
+- 本轮结束（`agent_end` 且不是 `willContinue`）时计数还没到 `every` 但大于 0，就补跑一次；该 watchdog 正在运行时，等它跑完再补跑。
+- transcript 按 `scope` 取：`full` 为整条分支，`window` 为上次运行之后的消息；内容不截断，也不含自己注入的 `<watchdog>` 消息。聊天 reviewer 不通过、或 Jev 选中带 prompt 的选项时，以 `<watchdog name=… severity=…>` 注入匹配的会话。
+- 注入时机按 `delivery`：`aside` 在运行中插到下一个 step 边界、空闲时开启新一轮；`steer` 打断当前运行；`followUp` 排到当前运行之后；`nextTurn` 等用户下一次提问。
 - 主会话按文件名 `<时间戳>_<uuid>.jsonl` 识别，subagent 从 `session_init.agent` 读名字。
-- 按提醒文本去重，按 `maxPerContext` 封顶；所以 Jev 的固定 `note` 每个 context 最多发一次。
+- 每个 watchdog 按提醒文本去重，按自己的 `maxPerContext` 封顶；所以 Jev 同一选项的 prompt 在每个 context 里每个 watchdog 最多发一次。分支切换、树跳转和压缩会重置所有计数、游标和封顶。
 - 任何失败都不提醒，也不阻塞主轮次。
-- subagent 上的注入是尽力而为，只有执行器收走结果前会话被重新打开才生效；主会话空闲时注入会开启新一轮。
+- subagent 上的注入是尽力而为，只有执行器收走结果前会话被重新打开才生效。
 - 聊天 reviewer 用禁止加载扩展的内存会话，不会递归。Jev 的用量和估算费用只写扩展 info 日志，不计入会话用量。两种后端各自消耗额度。
