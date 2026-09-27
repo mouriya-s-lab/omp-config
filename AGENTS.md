@@ -190,8 +190,10 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
 - YAML frontmatter: `name`, `description`, `spawns` (comma list). **No `model`
   field** — model binding lives in `config.yml`.
 - Prefer an explicit `spawns` allowlist over `"*"`; the **first** listed name is
-  the silent default for an omitted `agent`, so files list `task:low` first
-  (`agent/agents/README.txt:24-35`).
+  the silent default for an omitted `agent`. `task-high.md` is the only worker
+  that spawns `task:*` and lists `task:low` first; `task-free.md`,
+  `task-low.md`, and `task-mid.md` spawn only `mentor:default`
+  (`agent/agents/README.txt:24-36`).
 - Read `agent/agents/README.txt` before editing — it documents hard traps:
   `task.disabledAgents` (`task`, `scout`, `sonic`, `reviewer`,
   `security-reviewer`) fail even if allowlisted; recursion depth caps at 2
@@ -200,7 +202,7 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
   warning, not a call-site error.
 - **Keep non-agent notes as `.txt`** — every `.md` here is parsed as an agent
   candidate and a plain note becomes permanent per-dispatch log noise
-  (`agent/agents/README.txt:130-139`).
+  (`agent/agents/README.txt:131-140`).
 
 ## Important Files
 

@@ -31,8 +31,9 @@ The two forms differ in what an omitted `agent` field resolves to:
 The bundled `task` sits in `task.disabledAgents` in config.yml (along with `scout`,
 `sonic`, `reviewer`, `security-reviewer`), so "*" plus an omitted field is a hard
 preflight failure. An explicit list closes that trap for free — but choose the first
-entry deliberately, because it is the silent default. The files here list
-`task:low` first.
+entry deliberately, because it is the silent default. `task-high.md`, the only
+worker that spawns other workers, lists `task:low` first; `task-free.md`,
+`task-low.md`, and `task-mid.md` list only `mentor:default`.
 
 
 3. Names in `task.disabledAgents` fail even when allowlisted
@@ -48,12 +49,12 @@ on the default walks into item 2.
 depth 1; that worker's own child sits at depth 2, which is the cap — its `task` tool
 is *stripped* and its spawn policy cleared.
 
-Consequence: a worker can fan out one level, but whatever it hands out must be
-directly executable, never "decompose this further". A plan that needs three live
-levels has to start one level shallower.
+Consequence: an agent at depth 1 can fan out one level, but whatever it hands out must
+be directly executable, never "decompose this further". A plan that needs three live
+levels has to start one level shallower. A worker spawned at depth 2 also cannot reach
+its own `mentor:default`.
 
-Observed: a `task:free` child of a `task:low` worker had no `task` tool in its
-tool list.
+Observed: a depth-2 `task:free` child had no `task` tool in its tool list.
 
 
 5. An agent whose only tool is `yield` will silently lose its answer
