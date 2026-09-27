@@ -12,6 +12,7 @@ import {
 	z,
 } from "@oh-my-pi/pi-coding-agent";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import { cfgAsyncEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import { USER_TODO_EDIT_CUSTOM_TYPE } from "@oh-my-pi/pi-coding-agent/tools/todo";
 
 // ============================================================================
@@ -364,7 +365,7 @@ export default function forkTask(pi: ExtensionAPI): void {
 			if (!taskTool) return fail("fork_task: the `task` tool is unavailable in this session (recursion depth or settings).");
 			// Only async dispatch pre-allocates the child id before the spawn hook;
 			// sync dispatch reports the bare label, which misses nested id prefixes.
-			if (!parent.asyncJobManager || parent.settings.get("async.enabled") !== true) {
+			if (!parent.asyncJobManager || cfgAsyncEnabled.get(parent.settings) !== true) {
 				return fail("fork_task: requires background jobs (`async.enabled: true`).");
 			}
 			await parent.sessionManager.ensureOnDisk();
