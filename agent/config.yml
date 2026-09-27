@@ -95,3 +95,4 @@ eval:
 edit:
   mode: hashline
 readLineNumbers: true
+textVerbosity: high

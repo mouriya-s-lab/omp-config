@@ -209,7 +209,7 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
 
 - `agent/config.yml` — harness + UI config. Key sections: `extensions: [~/.claude]`,
   `task.agentModelOverrides` (model/fallback chains per tier),
-  `task.disabledAgents`, `compaction.methodOrder` + `thresholdTokens: 500000`,
+  `task.disabledAgents`, `compaction.methodOrder` (`compaction.thresholdTokens` is machine-local),
   feature toggles (`astGrep.enabled: true`, `github.enabled: true`,
   `fetch.enabled: false`, `browser.enabled: false`).
 - `agent/settings.json` — minimal legacy extension path: `{"extensions": ["~/.claude"]}`.

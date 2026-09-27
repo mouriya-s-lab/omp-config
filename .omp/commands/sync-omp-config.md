@@ -16,7 +16,7 @@ description: 把本机 ~/.omp/agent 配置和 pi-bansos 状态同步进本仓库
 - 运行时文件：`*.db*`、`*-wal`、`*-shm`、`*.lock`、`models.yml`、`models.yml.bak-*`、`commandcode-models.json`、`last-changelog-version`、`sessions/`、`terminal-sessions/`、`blobs/`、`cache/`、`logs/`。
 - `omp` 安装目录里的 `omp-light`、`omp-light.ts`、`omp-light.cmd`；light 三件只从 `~/.omp/agent` 取。
 - 应用托管的扩展：首行为 `@orca-managed-pi-extension`，或任意位置含 `marker: _otty`。以标记为准，不凭文件名判断。
-- `config.yml` 中的本机字段，仓库保留原值：`providers.webSearchOrder`、`modelRoles`、`defaultThinkingLevel`、`skills`、`symbolPreset`、`theme`、`colorBlindMode`、`hideThinkingBlock`、`statusLine`、`terminal`、`tui`、`display`、`worktree`。
+- `config.yml` 中的本机字段，仓库保留原值：`providers.webSearchOrder`、`modelRoles`、`defaultThinkingLevel`、`skills`、`symbolPreset`、`theme`、`colorBlindMode`、`hideThinkingBlock`、`statusLine`、`terminal`、`tui`、`display`、`worktree`、`compaction.thresholdTokens`。
 
 ## 步骤
 
