@@ -278,9 +278,9 @@ shake 按 OMP 18.3.1 手动 `/shake` 的配置（`AGGRESSIVE_SHAKE_CONFIG`）：
 |字段|说明|
 |---|---|
 |`target`（必填）|`main`、agent 名（如 `task:low`）、`*`、`subagents`，或逗号分隔列表|
-|`name`、`enabled`|`enabled` 默认 `true`|
+|`name`、`enabled`|`name` 缺省取文件名里的标签，`/watchdog` 按它找 watchdog；`enabled` 默认 `true`，是全局开关|
 |`delivery`|`aside`（默认）、`steer`、`nextTurn`、`followUp`|
-|`maxPerContext`|本 watchdog 每个 context 最多提醒次数，默认 6|
+|`maxPerContext`|本 watchdog 在两次压缩之间最多提醒几次，默认不限；每次压缩后计数清零|
 |`every`|被观察的 agent 累计多少条操作（每个工具调用算 1 条，每条非空文字回复算 1 条）后跑一次，默认 30|
 |`scope`|`full`（默认，看整条分支的全量上下文）或 `window`（只看本 watchdog 上次运行之后的新消息）|
 |`model`、`tools`|聊天 reviewer 后端用，见下|
@@ -326,7 +326,17 @@ option.blocker.delivery: steer
 - transcript 按 `scope` 取：`full` 为整条分支，`window` 为上次运行之后的消息；内容不截断，也不含自己注入的 `<watchdog>` 消息。聊天 reviewer 不通过、或 Jev 选中带 prompt 的选项时，以 `<watchdog name=… severity=…>` 注入匹配的会话。
 - 注入时机按 `delivery`：`aside` 在运行中插到下一个 step 边界、空闲时开启新一轮；`steer` 打断当前运行；`followUp` 排到当前运行之后；`nextTurn` 等用户下一次提问。
 - 主会话按文件名 `<时间戳>_<uuid>.jsonl` 识别，subagent 从 `session_init.agent` 读名字。
-- 每个 watchdog 按提醒文本去重，按自己的 `maxPerContext` 封顶；所以 Jev 同一选项的 prompt 在每个 context 里每个 watchdog 最多发一次。分支切换、树跳转和压缩会重置所有计数、游标和封顶。
+- 每个 watchdog 按提醒文本去重；设置了 `maxPerContext` 时按它封顶，默认不封顶。去重记录和封顶计数只在当前 context 内有效，每次压缩（手动或自动）后清零，所以 Jev 同一选项的 prompt 每个 watchdog 在两次压缩之间最多发一次；压缩不影响累计的操作条数、`window` 游标和正在进行的判定。分支切换和树跳转会重置全部计数、游标和封顶，并丢弃还没返回的判定。
 - 任何失败都不提醒，也不阻塞主轮次。
 - subagent 上的注入是尽力而为，只有执行器收走结果前会话被重新打开才生效。
 - 聊天 reviewer 用禁止加载扩展的内存会话，不会递归。Jev 的用量和估算费用只写扩展 info 日志，不计入会话用量。两种后端各自消耗额度。
+
+斜杠命令（子命令、watchdog 名和范围都有补全）：
+
+|命令|作用|
+|---|---|
+|`/watchdog` 或 `/watchdog list`|列出发现的全部 watchdog 文件：当前是否生效、全局开关、本会话覆盖、目标、`every`、`scope`、后端和路径|
+|`/watchdog on\|off <name>` 或 `… <name> session`|只在本会话开启或关闭，不改文件。记录为会话自定义条目，恢复会话后仍然有效，并跟随会话分支；只能用于目标包含本会话的 watchdog|
+|`/watchdog on\|off <name> global`|改写该文件 frontmatter 里的 `enabled` 行（没有就加一行），对之后所有会话生效，并清除本会话对它的覆盖|
+
+本会话覆盖优先于文件里的 `enabled`。关闭时正在进行的判定结果会被丢弃；重新开启时计数、游标和封顶从零开始。多个文件同名时命令报错并列出路径，需要给它们设不同的 `name`。

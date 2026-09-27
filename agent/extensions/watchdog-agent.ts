@@ -7,7 +7,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent";
 import { TypeSafeJudge, isJudgmentApi } from "@oh-my-pi/pi-ai";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 
@@ -38,10 +38,10 @@ import { basename, dirname, join, resolve } from "node:path";
 //   option.<label>: <criteria>                   # Jev choice option (>= 2); empty = name suffices
 //   option.<label>.prompt: <text>                # injected when Jev picks <label>; omit = silent
 //   option.<label>.delivery: steer               # optional per-option delivery override
-//   name:   Architecture                          # optional label
-//   enabled: true                                 # optional, default true
+//   name:   Architecture                          # optional label; `/watchdog` addresses it by name
+//   enabled: true                                 # optional, default true; `/watchdog on|off <name> global` rewrites it
 //   delivery: aside                               # aside|steer|nextTurn|followUp
-//   maxPerContext: 6                              # optional safety cap (per watchdog)
+//   maxPerContext: 6                              # optional per-watchdog cap; default unlimited
 //   every:  30                                    # run after this many watched actions (default 30)
 //   scope:  full                                  # full (whole branch, default) | window (since own last run)
 // Body = review priorities for chat; judgment criterion for Jev. Jev evaluates
@@ -62,8 +62,16 @@ import { basename, dirname, join, resolve } from "node:path";
 // previous run. The transcript is never truncated. Chat reviewers use a
 // tool-capable `createAgentSession`; native Jev uses `Judge.judge` and only
 // selects one configured option whose prewritten prompt (if any) is injected.
-// Findings go through `sendUserMessage`; repeats are de-duplicated and bounded
-// per watchdog per context so a stubborn model cannot loop.
+// Findings go through `sendUserMessage`; repeats are de-duplicated and, when
+// `maxPerContext` is set, bounded per watchdog per context. Each compaction
+// starts a new context: the dedupe set and cap count reset, nothing else does.
+//
+// COMMANDS. `/watchdog [list]` lists every discovered file with its global
+// (`enabled`) and session state. `/watchdog on|off <name> [session|global]`
+// switches one watchdog: `session` (default) records a session custom entry that
+// shadows the file for this session only and follows the session branch;
+// `global` rewrites the file's `enabled` line and drops this session's override.
+// Subcommands, names and scopes are offered as argument completions.
 //
 // FAILURE POLICY. Every failure path (no match, unresolved model, judge
 // unavailable, reviewer error/timeout, malformed file) degrades to "no note".
@@ -108,7 +116,7 @@ const THINKING_SUFFIXES: Record<string, true> = {
 };
 
 const REVIEW_TIMEOUT_MS = 90_000; // hard cap on one reviewer run.
-const DEFAULT_MAX_PER_CONTEXT = 6; // advisories per watchdog before going quiet until a context reset.
+const DEFAULT_MAX_PER_CONTEXT = Number.POSITIVE_INFINITY; // advisories per watchdog per context; unlimited unless configured.
 const DEFAULT_EVERY = 30; // watched actions (tool calls + text replies) between runs.
 
 /** Which messages a run reviews: the whole branch, or only those after the watchdog's previous run. */
@@ -121,6 +129,8 @@ type Identity = { readonly kind: "main" } | { readonly kind: "sub"; readonly age
 type WatchdogBase = {
 	readonly name: string;
 	readonly targets: readonly string[];
+	/** File-level (global) switch: frontmatter `enabled`, default true. A session override may shadow it. */
+	readonly enabled: boolean;
 	readonly delivery: DeliverAs;
 	readonly maxPerContext: number;
 	readonly every: number;
@@ -223,8 +233,10 @@ function unquote(value: string): string {
 	return value.trim().replace(/^["']|["']$/g, "").trim();
 }
 
+const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
+
 function parseFrontmatter(raw: string): { fields: Record<string, string>; body: string } {
-	const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
+	const m = raw.match(FRONTMATTER_PATTERN);
 	if (!m) return { fields: {}, body: raw };
 	const fields: Record<string, string> = {};
 	for (const line of m[1].split(/\r?\n/)) {
@@ -237,7 +249,23 @@ function parseFrontmatter(raw: string): { fields: Record<string, string>; body: 
 	return { fields, body: raw.slice(m[0].length) };
 }
 
-/** Parse one `WATCHDOG-*.md`; returns null when disabled, invalid, targetless, or unreadable. */
+/**
+ * The file text with frontmatter `enabled` set, replacing an existing `enabled:` line or
+ * appending one as the last frontmatter line; everything else is kept byte for byte.
+ * Null when the file has no frontmatter (it could not be a valid watchdog).
+ */
+function setFrontmatterEnabled(raw: string, enabled: boolean): string | null {
+	const m = raw.match(FRONTMATTER_PATTERN);
+	if (!m) return null;
+	const blockStart = m[0].startsWith("---\r\n") ? 5 : 4;
+	const blockEnd = blockStart + m[1].length;
+	const eol = m[1].includes("\r\n") ? "\r\n" : "\n";
+	const line = /^([ \t]*)enabled[ \t]*:.*$/im;
+	const block = line.test(m[1]) ? m[1].replace(line, `$1enabled: ${enabled}`) : `${m[1]}${eol}enabled: ${enabled}`;
+	return raw.slice(0, blockStart) + block + raw.slice(blockEnd);
+}
+
+/** Parse one `WATCHDOG-*.md` (enabled or not); returns null when invalid, targetless, or unreadable. */
 function parseWatchdogFile(path: string, warn?: (message: string) => void): WatchdogSpec | null {
 	let raw: string;
 	try {
@@ -247,7 +275,6 @@ function parseWatchdogFile(path: string, warn?: (message: string) => void): Watc
 	}
 	const { fields, body } = parseFrontmatter(raw);
 	const enabled = fields.enabled === undefined || /^(true|yes|on|1)$/i.test(unquote(fields.enabled));
-	if (!enabled) return null;
 	const targets = fields.target ? toList(fields.target) : [];
 	if (targets.length === 0) return null;
 
@@ -260,6 +287,7 @@ function parseWatchdogFile(path: string, warn?: (message: string) => void): Watc
 	const common: WatchdogBase = {
 		name: fields.name ? unquote(fields.name) : fallbackName || "watchdog",
 		targets,
+		enabled,
 		delivery,
 		maxPerContext,
 		every: parsePositiveInt(fields.every, DEFAULT_EVERY),
@@ -737,41 +765,112 @@ type RunState = { readonly kind: "idle" } | { readonly kind: "running"; readonly
 
 /** Per-watchdog runtime state; each watchdog counts, runs, dedupes and caps on its own. */
 type WatchdogState = {
-	readonly spec: WatchdogSpec;
+	/** Latest parse of the watchdog's file; replaced in place when the roster is re-read. */
+	spec: WatchdogSpec;
 	/** Watched actions since this watchdog's last run started. */
 	pending: number;
 	/** Newest message timestamp covered by the last run (`window` scope cursor). */
 	cursor: number;
 	run: RunState;
+	/** Advisories delivered since the last compaction (or branch/tree reset); compared against `maxPerContext`. */
 	sent: number;
+	/** Normalized advisory texts delivered since the last compaction (or branch/tree reset). */
 	readonly notes: Set<string>;
 };
 
-export default function watchdogAgent(pi: ExtensionAPI): void {
-	let identified = false;
-	let specs: WatchdogSpec[] = [];
-	let states: WatchdogState[] = [];
+/** Session-scoped switch for one watchdog file, persisted as a custom session entry. */
+const OVERRIDE_ENTRY_TYPE = "mouriya.omp.watchdog-agent.override";
+type SessionOverride = { readonly filePath: string; readonly enabled: boolean | null };
 
-	const resetStates = (): void => {
-		states = specs.map((spec): WatchdogState => ({ spec, pending: 0, cursor: 0, run: { kind: "idle" }, sent: 0, notes: new Set<string>() }));
+function parseOverride(data: unknown): SessionOverride | null {
+	if (!hasKey(data, "filePath") || typeof data.filePath !== "string" || !hasKey(data, "enabled")) return null;
+	const enabled = data.enabled;
+	if (enabled !== null && typeof enabled !== "boolean") return null;
+	return { filePath: data.filePath, enabled };
+}
+
+/** Session overrides in effect on the given branch: the last entry per file wins; `null` clears. */
+function overridesFromBranch(entries: ReadonlyArray<unknown>): Map<string, boolean> {
+	const out = new Map<string, boolean>();
+	for (const e of entries) {
+		if (!hasKey(e, "type") || e.type !== "custom" || !hasKey(e, "customType") || e.customType !== OVERRIDE_ENTRY_TYPE) continue;
+		const parsed = parseOverride(hasKey(e, "data") ? e.data : undefined);
+		if (!parsed) continue;
+		if (parsed.enabled === null) out.delete(parsed.filePath);
+		else out.set(parsed.filePath, parsed.enabled);
+	}
+	return out;
+}
+
+type Toggle = "on" | "off";
+type ToggleScope = "session" | "global";
+
+/** `/watchdog` arguments after parsing. */
+type WatchdogCommand =
+	| { readonly kind: "list" }
+	| { readonly kind: "toggle"; readonly toggle: Toggle; readonly name: string; readonly scope: ToggleScope }
+	| { readonly kind: "invalid"; readonly reason: string };
+
+const WATCHDOG_USAGE = "usage: /watchdog [list] | /watchdog on|off <name> [session|global]";
+
+function parseWatchdogCommand(args: string): WatchdogCommand {
+	const tokens = args.trim().split(/\s+/).filter(Boolean);
+	const sub = (tokens[0] ?? "list").toLowerCase();
+	if (sub === "list") return tokens.length <= 1 ? { kind: "list" } : { kind: "invalid", reason: WATCHDOG_USAGE };
+	if (sub !== "on" && sub !== "off") return { kind: "invalid", reason: WATCHDOG_USAGE };
+	const rest = tokens.slice(1);
+	const last = rest.at(-1)?.toLowerCase();
+	const scope: ToggleScope = last === "global" ? "global" : "session";
+	const nameTokens = last === "global" || last === "session" ? rest.slice(0, -1) : rest;
+	if (nameTokens.length === 0) return { kind: "invalid", reason: WATCHDOG_USAGE };
+	return { kind: "toggle", toggle: sub, name: nameTokens.join(" "), scope };
+}
+
+export default function watchdogAgent(pi: ExtensionAPI): void {
+	let identity: Identity | null = null;
+	let cwd = process.cwd();
+	/** Every discovered watchdog file, enabled or not, whatever its target. */
+	let roster: WatchdogSpec[] = [];
+	let overrides = new Map<string, boolean>();
+	/** Runtime state of the watchdogs active in this session, keyed by file path. */
+	let states = new Map<string, WatchdogState>();
+
+	const targetsHere = (spec: WatchdogSpec): boolean => identity !== null && matchesIdentity(spec, identity);
+	const effectiveEnabled = (spec: WatchdogSpec): boolean => overrides.get(spec.filePath) ?? spec.enabled;
+
+	/** Re-read every watchdog file and rebuild the active set, keeping state of watchdogs that stay active. */
+	const refresh = (warn: boolean): void => {
+		const specs: WatchdogSpec[] = [];
+		for (const file of discoverWatchdogFiles(cwd)) {
+			const spec = parseWatchdogFile(file, warn ? message => pi.logger?.warn?.(message) : undefined);
+			if (spec) specs.push(spec);
+		}
+		roster = specs;
+		const next = new Map<string, WatchdogState>();
+		for (const spec of specs) {
+			if (!targetsHere(spec) || !effectiveEnabled(spec)) continue;
+			const prev = states.get(spec.filePath);
+			if (prev) prev.spec = spec;
+			next.set(spec.filePath, prev ?? { spec, pending: 0, cursor: 0, run: { kind: "idle" }, sent: 0, notes: new Set<string>() });
+		}
+		states = next;
 	};
 
-	const configure = (ctx: ExtensionContext): void => {
-		const identity = resolveIdentity(ctx);
-		identified = identity !== null;
-		const matched: WatchdogSpec[] = [];
-		if (identity) {
-			for (const file of discoverWatchdogFiles(ctx.cwd)) {
-				const spec = parseWatchdogFile(file, message => pi.logger?.warn?.(message));
-				if (spec && matchesIdentity(spec, identity)) matched.push(spec);
-			}
-		}
-		specs = matched;
-		resetStates();
-		if (identity && matched.length > 0) {
-			const who = identity.kind === "main" ? "main" : `subagent "${identity.agent}"`;
-			pi.logger?.info?.(`watchdog: ${matched.length} watchdog(s) active for ${who} — ${matched.map(s => `${s.name}(every=${s.every}, scope=${s.scope})`).join(", ")}`);
-		}
+	const logActive = (): void => {
+		if (!identity) return;
+		const who = identity.kind === "main" ? "main" : `subagent "${identity.agent}"`;
+		const active = [...states.values()].map(s => `${s.spec.name}(every=${s.spec.every}, scope=${s.spec.scope})`);
+		pi.logger?.info?.(`watchdog: ${active.length} watchdog(s) active for ${who}${active.length > 0 ? ` — ${active.join(", ")}` : ""}`);
+	};
+
+	/** Session boundary: identity, overrides and the active set are rebuilt; all runtime state starts over. */
+	const load = (ctx: ExtensionContext): void => {
+		identity = resolveIdentity(ctx);
+		cwd = ctx.cwd;
+		overrides = overridesFromBranch(ctx.sessionManager.getBranch());
+		states = new Map();
+		refresh(true);
+		logActive();
 	};
 
 	const deliver = (state: WatchdogState, verdict: Verdict | null): void => {
@@ -784,7 +883,7 @@ export default function watchdogAgent(pi: ExtensionAPI): void {
 		const text = `<watchdog name="${safeName}" severity="${verdict.severity}">\n${verdict.note}\n</watchdog>`;
 		pi.sendUserMessage(text, { deliverAs: verdict.delivery, attribution: "agent" });
 		state.sent += 1;
-		pi.logger?.info?.(`watchdog "${spec.name}": ${verdict.severity} → delivered (${state.sent}/${spec.maxPerContext})`);
+		pi.logger?.info?.(`watchdog "${spec.name}": ${verdict.severity} → delivered (${state.sent}/${Number.isFinite(spec.maxPerContext) ? spec.maxPerContext : "∞"})`);
 	};
 
 	/** Start one review now; never awaited by the caller, so the watched agent keeps running. */
@@ -798,43 +897,155 @@ export default function watchdogAgent(pi: ExtensionAPI): void {
 		if (transcript.trim() === "") return;
 		state.run = { kind: "running", flushAfter: false };
 		const review = spec.kind === "jev" ? runJev(pi, ctx, spec, transcript) : runReviewer(pi, ctx, spec, transcript);
+		// A session boundary, branch move or switch-off removed this state; its finding is stale.
+		const live = (): boolean => states.get(spec.filePath) === state;
 		void review.then(
 			verdict => {
-				// A context reset or session switch replaced the roster; drop the stale finding.
-				if (!states.includes(state)) return;
-				deliver(state, verdict);
+				if (live()) deliver(state, verdict);
 			},
 			() => undefined,
 		).finally(() => {
-			if (!states.includes(state)) return;
+			if (!live()) return;
 			const flush = state.run.kind === "running" && state.run.flushAfter;
 			state.run = { kind: "idle" };
-			if (state.pending >= spec.every || (flush && state.pending > 0)) start(state, ctx, undefined);
+			if (state.pending >= state.spec.every || (flush && state.pending > 0)) start(state, ctx, undefined);
 		});
 	};
 
-	pi.on("session_start", (_event, ctx) => configure(ctx));
-	pi.on("session_switch", (_event, ctx) => configure(ctx));
-	// Boundaries that rewrite the working transcript invalidate every cursor, counter and cap.
-	pi.on("session_branch", () => resetStates());
-	pi.on("session_tree", () => resetStates());
-	pi.on("session_compact", () => resetStates());
+	/** One line per watchdog file for `/watchdog list`. */
+	const describe = (spec: WatchdogSpec): string => {
+		const override = overrides.get(spec.filePath);
+		const state = !targetsHere(spec) ? "not for this session" : effectiveEnabled(spec) ? "ON" : "OFF";
+		const session = override === undefined ? "—" : override ? "on" : "off";
+		const backend = spec.kind === "jev" ? `jev ${spec.judge.provider}/${spec.judge.modelId}` : `chat ${spec.model ?? "@advisor"}`;
+		return `${spec.name}: ${state} · global ${spec.enabled ? "on" : "off"} · session ${session} · target ${spec.targets.join(",")} · every ${spec.every} · scope ${spec.scope} · ${backend}\n  ${spec.filePath}`;
+	};
+
+	const toggle = (command: Extract<WatchdogCommand, { kind: "toggle" }>): { readonly level: "info" | "error"; readonly text: string } => {
+		const matches = roster.filter(spec => spec.name.toLowerCase() === command.name.toLowerCase());
+		if (matches.length === 0) return { level: "error", text: `watchdog "${command.name}" not found (see /watchdog list)` };
+		if (matches.length > 1) {
+			return { level: "error", text: `watchdog name "${command.name}" is ambiguous; give each file a unique \`name:\`:\n${matches.map(s => `  ${s.filePath}`).join("\n")}` };
+		}
+		const spec = matches[0];
+		const enabled = command.toggle === "on";
+		switch (command.scope) {
+			case "session": {
+				if (!targetsHere(spec)) {
+					return { level: "error", text: `watchdog "${spec.name}" does not target this session (target ${spec.targets.join(",")}); use \`global\`` };
+				}
+				overrides.set(spec.filePath, enabled);
+				pi.appendEntry<SessionOverride>(OVERRIDE_ENTRY_TYPE, { filePath: spec.filePath, enabled });
+				refresh(false);
+				return { level: "info", text: `watchdog "${spec.name}" ${command.toggle} for this session` };
+			}
+			case "global": {
+				let raw: string;
+				try {
+					raw = readFileSync(spec.filePath, "utf8");
+				} catch (error) {
+					return { level: "error", text: `cannot read ${spec.filePath}: ${error instanceof Error ? error.message : String(error)}` };
+				}
+				const updated = setFrontmatterEnabled(raw, enabled);
+				if (updated === null) return { level: "error", text: `${spec.filePath} has no frontmatter` };
+				try {
+					if (updated !== raw) writeFileSync(spec.filePath, updated);
+				} catch (error) {
+					return { level: "error", text: `cannot write ${spec.filePath}: ${error instanceof Error ? error.message : String(error)}` };
+				}
+				// The file is now the switch; a session override would keep shadowing it here.
+				if (overrides.delete(spec.filePath)) pi.appendEntry<SessionOverride>(OVERRIDE_ENTRY_TYPE, { filePath: spec.filePath, enabled: null });
+				refresh(false);
+				return { level: "info", text: `watchdog "${spec.name}" ${command.toggle} globally (${spec.filePath})` };
+			}
+		}
+	};
+
+	pi.registerCommand("watchdog", {
+		description: "List watchdogs or switch one on/off for this session or globally: /watchdog [list] | on|off <name> [session|global]",
+		getArgumentCompletions: prefix => {
+			refresh(false);
+			const lower = prefix.toLowerCase();
+			if (!/\s/.test(prefix)) {
+				const subs = [
+					{ value: "list", label: "list", description: "all watchdog files and their state" },
+					{ value: "on ", label: "on", description: "switch a watchdog on" },
+					{ value: "off ", label: "off", description: "switch a watchdog off" },
+				];
+				return subs.filter(s => s.value.startsWith(lower));
+			}
+			const sub = lower.split(/\s+/)[0];
+			if (sub !== "on" && sub !== "off") return null;
+			const items: { value: string; label: string; description: string }[] = [];
+			const names = new Set<string>();
+			for (const spec of roster) {
+				if (names.has(spec.name.toLowerCase())) continue;
+				names.add(spec.name.toLowerCase());
+				const scopes: ToggleScope[] = targetsHere(spec) ? ["session", "global"] : ["global"];
+				for (const scope of scopes) {
+					const value = `${sub} ${spec.name} ${scope}`;
+					if (!value.toLowerCase().startsWith(lower)) continue;
+					const now = !targetsHere(spec) ? "not for this session" : effectiveEnabled(spec) ? "now ON" : "now OFF";
+					const where = scope === "session" ? "this session only" : `writes enabled: ${sub === "on"} to the file`;
+					items.push({ value, label: `${spec.name} ${scope}`, description: `${where} · ${now}` });
+				}
+			}
+			return items;
+		},
+		handler: async (args, ctx) => {
+			if (identity === null) load(ctx);
+			const command = parseWatchdogCommand(args);
+			switch (command.kind) {
+				case "list": {
+					refresh(false);
+					ctx.ui.notify(roster.length === 0 ? "no WATCHDOG-*.md files found" : roster.map(describe).join("\n"), "info");
+					return;
+				}
+				case "invalid":
+					ctx.ui.notify(command.reason, "error");
+					return;
+				case "toggle": {
+					const result = toggle(command);
+					pi.logger?.info?.(`watchdog command: ${result.text}`);
+					logActive();
+					ctx.ui.notify(result.text, result.level);
+					return;
+				}
+			}
+		},
+	});
+
+	pi.on("session_start", (_event, ctx) => load(ctx));
+	pi.on("session_switch", (_event, ctx) => load(ctx));
+	// Branch and tree moves swap the working transcript: overrides are re-read from the new branch,
+	// every cursor, counter and cap starts over, and findings in flight about the old one are dropped.
+	pi.on("session_branch", (_event, ctx) => load(ctx));
+	pi.on("session_tree", (_event, ctx) => load(ctx));
+	// Compaction starts a new context on the same transcript: only the per-context budget
+	// (`maxPerContext` count and dedupe set) resets. Accumulated actions, the `window` cursor and
+	// in-flight reviews carry over.
+	pi.on("session_compact", () => {
+		for (const state of states.values()) {
+			state.sent = 0;
+			state.notes.clear();
+		}
+	});
 
 	pi.on("message_end", (event, ctx) => {
 		// A session that had no file at start (identity unknown) is retried lazily.
-		if (!identified) configure(ctx);
+		if (identity === null) load(ctx);
 		const actions = countActions(event.message);
 		if (actions === 0) return;
-		for (const state of states) {
+		for (const state of states.values()) {
 			state.pending += actions;
 			if (state.run.kind === "idle" && state.pending >= state.spec.every) start(state, ctx, event.message);
 		}
 	});
 
 	pi.on("agent_end", (event, ctx) => {
-		if (!identified) configure(ctx);
+		if (identity === null) load(ctx);
 		if (event.willContinue === true) return; // auto-continuation, not a settled run.
-		for (const state of states) {
+		for (const state of states.values()) {
 			if (state.pending === 0) continue;
 			if (state.run.kind === "idle") start(state, ctx, undefined);
 			else state.run = { kind: "running", flushAfter: true };
@@ -847,7 +1058,10 @@ export default function watchdogAgent(pi: ExtensionAPI): void {
 export function __testables() {
 	return {
 		parseFrontmatter,
+		setFrontmatterEnabled,
 		parseWatchdogFile,
+		parseWatchdogCommand,
+		overridesFromBranch,
 		toList,
 		matchesIdentity,
 		interpretVerdict,
