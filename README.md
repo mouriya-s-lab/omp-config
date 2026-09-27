@@ -13,7 +13,6 @@ OMP 配置里可以审查、可以迁移的那部分。不是 `~/.omp` 的完整
 |`agent/extensions/`|本地扩展|`~/.omp/agent/extensions/`|
 |`pi/agent/pi-bansos-relay-state.json`|`pi-bansos` 插件状态|`~/.pi/agent/`|
 |`install-plugins.sh`、`plugin-audit.sh`|插件安装和漂移检查|—|
-|`docs/`|对照研究，不参与迁移|—|
 
 ## 日常命令
 
@@ -157,8 +156,6 @@ harness 会把 `APPEND_SYSTEM.md` 和每个 agent 的 `description` 都注入主
 - 规则分布：派发方的写在 `APPEND_SYSTEM.md` 和 `task-high.md`；worker 在隔离工作树里的路径规则写在四个 `task-*.md` 里（subagent 收不到 `APPEND_SYSTEM.md`）。模型忘了隔离时，`isolation-nudge.ts` 拦一次作提醒。
 
 `task` 和 `sonic` 是 OMP 内置 subagent，不在 `agent/agents/` 里。Vibe 模式的第一层派发固定用它们，所以 `config.yml` 只为这个场景保留它们的模型覆盖，常规任务不用。
-
-Claude Code 2.1.280 的 subagent worktree 实现分析见 [`docs/claude-code-subagent-worktree-design.md`](docs/claude-code-subagent-worktree-design.md)。
 
 ## 本地扩展
 
