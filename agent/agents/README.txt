@@ -32,8 +32,8 @@ The bundled `task` sits in `task.disabledAgents` in config.yml (along with `scou
 `sonic`, `reviewer`, `security-reviewer`), so "*" plus an omitted field is a hard
 preflight failure. An explicit list closes that trap for free — but choose the first
 entry deliberately, because it is the silent default. `task-high.md`, the only
-worker that spawns other workers, lists `task:low` first; `task-free.md`,
-`task-low.md`, and `task-mid.md` list only `mentor:default`.
+worker that spawns other workers, lists `task:mid` (the default worker tier) first;
+`task-free.md`, `task-low.md`, and `task-mid.md` list only `mentor:default`.
 
 
 3. Names in `task.disabledAgents` fail even when allowlisted

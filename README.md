@@ -133,8 +133,8 @@ harness 会把 `APPEND_SYSTEM.md` 和每个 agent 的 `description` 都注入主
 |名称|模型与成本（每 1M token，综合）|可派发|用途|
 |---|---|---|---|
 |`task:high`|Claude Opus 5.5，约 0.45 USD|全部 `task:*`、两个 discussant、mentor|必须一次做对，或更便宜的 tier 裁决不了的工作；负责所派子批次的契约、验收与集成|
-|`task:mid`|Opus 级，约 0.3 USD|mentor|错误代价高、证据难取、便宜 tier 结论冲突的工作|
-|`task:low`|Opus 级，约 0.01 USD|mentor|默认 tier，结果可直接交付；也负责验证 `task:free` 的结果|
+|`task:mid`|Opus 级，约 0.3 USD|mentor|默认 tier：委派的实现、调查、调试和验证；也裁决便宜 tier 之间的冲突|
+|`task:low`|Opus 级，约 0.01 USD|mentor|成本优先、结果可直接交付的工作：批量机械改动、查询、例行检查；也负责验证 `task:free` 的结果|
 |`task:free`|Opus 级，免费，并发几乎不限|mentor|结果不需要独立验证的工作：找候选代码或文档、列方案、探索性试验|
 |`discuss:divergent`|—|—|发散视角：找问题边界之外的替代方案及其代价|
 |`discuss:steady`|—|—|保守视角：查风险、隐藏假设、遗漏状态和更简单的方案|
@@ -142,7 +142,7 @@ harness 会把 `APPEND_SYSTEM.md` 和每个 agent 的 `description` 都注入主
 
 规则：
 
-- **tier 按成本和所需可信度选，不按难度选。** 验证也算成本：需要验证才能采信的结果，用 `task:free` 再加验证者比 `task:low` 做一次更贵。进仓库的改动、会被直接采信的结论和裁决都给 `task:low` 及以上。`task:free` 的结果不能互相验证。
+- **tier 按成本和所需可信度选，不按难度选。** 默认派 `task:mid`；成本比多出的判断力更重要时（批量机械改动、查询、验证 `task:free`）降到 `task:low`。验证也算成本：需要验证才能采信的结果，用 `task:free` 再加验证者比 `task:low` 做一次更贵。进仓库的改动、会被直接采信的结论和裁决都给 `task:low` 及以上。`task:free` 的结果不能互相验证。
 - **`task:free`、`task:low`、`task:mid` 不接设计和核心工作**：架构、领域类型与状态模型、接口与跨切片契约、改动的核心逻辑，以及文档、prompt、skill、agent 定义的设计。`task:high` 没有这条限制。
 - **核心代码、小改动和文档设计由当前负责人自己写**，不交给任何 `task:*`。小改动按整件工作判断：写派工单不比直接改省事，就自己改。
 - **其余工作切到最小、各有验收标准的单元，一次并行派出。** 单元能并行的条件：各有验收标准、启动不依赖别的单元输出、文件和状态归属不重叠。只因接口或文件边界没定而不满足的，先定边界再并行。确实拆不开的，主 agent 交给一个 worker，worker 则自己做。

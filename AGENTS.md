@@ -192,7 +192,7 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
   field** — model binding lives in `config.yml`.
 - Prefer an explicit `spawns` allowlist over `"*"`; the **first** listed name is
   the silent default for an omitted `agent`. `task-high.md` is the only worker
-  that spawns `task:*` and lists `task:low` first; `task-free.md`,
+  that spawns `task:*` and lists `task:mid` (the default worker tier) first; `task-free.md`,
   `task-low.md`, and `task-mid.md` spawn only `mentor:default`
   (`agent/agents/README.txt:24-36`).
 - Read `agent/agents/README.txt` before editing — it documents hard traps:
@@ -213,7 +213,7 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
   feature toggles (`astGrep.enabled: true`, `github.enabled: true`,
   `fetch.enabled: false`, `browser.enabled: false`).
 - `agent/settings.json` — minimal legacy extension path: `{"extensions": ["~/.claude"]}`.
-- `agent/APPEND_SYSTEM.md` — global system-prompt appendix (orchestration stance,
+- `agent/APPEND_SYSTEM.md` — global system-prompt appendix (user-instruction precedence, orchestration stance,
   no-token-saving rule, design-document read-in-full rule, spawn briefing, agent chat and lifecycle,
   `task` vs `fork_task`, agent tiers, shared-checkout vs `isolated: true` rules,
   tool policy). Task children
