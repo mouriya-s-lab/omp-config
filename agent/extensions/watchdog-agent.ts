@@ -6,7 +6,6 @@ import {
 	type ExtensionContext,
 } from "@oh-my-pi/pi-coding-agent";
 import { TypeSafeJudge, isJudgmentApi } from "@oh-my-pi/pi-ai";
-import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -727,7 +726,15 @@ async function runJev(pi: ExtensionAPI, ctx: ExtensionContext, spec: JevWatchdog
 			state: { guidance: spec.guidance, transcript },
 			questions: { review: { type: "choice", instructions: spec.instructions, criteria } },
 		}, { signal });
-		if (result.usage.cost.total === 0) calculateCost(model, result.usage);
+		if (result.usage.cost.total === 0) {
+			// Extensions resolve only omp's host packages (pi-agent-core, pi-ai, pi-coding-agent,
+			// pi-natives, pi-tui, pi-utils), so catalog `calculateCost` is unreachable here.
+			// Judgments report only input/output tokens; price them at the model's base rates.
+			const cost = result.usage.cost;
+			cost.input = (model.cost.input / 1_000_000) * result.usage.input;
+			cost.output = (model.cost.output / 1_000_000) * result.usage.output;
+			cost.total = cost.input + cost.output;
+		}
 		pi.logger?.info?.(`watchdog "${spec.name}": native judge usage`, {
 			provider: result.provider,
 			model: result.model,

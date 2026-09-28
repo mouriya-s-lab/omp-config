@@ -160,8 +160,11 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
   `@oh-my-pi/pi-coding-agent` (`createAgentSession`, `SessionManager`, `z`,
   `getAgentDir`, ...), `@oh-my-pi/pi-natives` (`glob`/`grep`), `@oh-my-pi/pi-ai`
   (usage types and the native `TypeSafeJudge`/`isJudgmentApi` used by
-  `watchdog-agent.ts`), `@oh-my-pi/pi-catalog/models` (`calculateCost`).
-  Node built-ins (`node:fs`, `node:path`, `node:crypto`, ...) are used heavily.
+  `watchdog-agent.ts`), `@oh-my-pi/pi-tui`, `@oh-my-pi/pi-utils`. Extensions
+  resolve only omp's host packages (`pi-agent-core`, `pi-ai`, `pi-coding-agent`,
+  `pi-natives`, `pi-tui`, `pi-utils`); other `@oh-my-pi/*` packages such as
+  `pi-catalog` fail to load. Node built-ins (`node:fs`, `node:path`,
+  `node:crypto`, ...) are used heavily.
 - **Helper sessions pass `taskDepth: 1`:** every `createAgentSession` an
   extension builds for its own model calls (`bro.ts`, `doc-polish.ts`,
   `lang-nag.ts`, `watchdog-agent.ts` chat reviewer, `fork-task.ts`) sets `taskDepth: 1`.
