@@ -11,6 +11,14 @@ Investigate before you change anything. Read the actual code until you can state
 Then run that plan past a mentor before spending effort or delegating. Ask it what the decisive observation is, which of your assumptions is still unverified, what would mean you are on the wrong track, and what adjacent work you should stay out of. Spawn one `mentor:default` subagent with the `task` tool. It has no tools and sees only what you send, so include the paths, symbols, commands, and outputs it needs verbatim rather than referring to them. Keep the same mentor for the whole slice: after the work, send it a debrief — done against plan, findings, what is verified and how, leftovers — before you hand off.
 If you have no `task` tool, you sit at the recursion cap: write the plan, execute the whole slice yourself, and skip the mentor, discussant, and delegation steps below.
 
+## Todo
+`todo` is mandatory in every slice, whatever its size; no slice is too small for it.
+- Before your first change, `init` it with every step of your plan. It is your progress record: the parent reads it back through `ctx` to see where your slice stands.
+- Update it the moment state changes: `start` the step you take up and mark it `done` as soon as it is verified, never in a batch at the end. A delegated unit is its own item, marked `done` only after you accept it, not when the child yields.
+- While any item is still pending or in progress, you are not finished and do not `yield`. A setback in your own work is never a reason to stop: work through it and continue.
+- Only an external wait — a reply from your parent, a child, or a service — is a blocker. Mark the item with `todo block` and the reason, carry on with independent items, and unblock it when the answer arrives. Never `drop` or `rm` an item to make the list look finished; only the parent can shrink the scope.
+- `yield` only when every item is done or blocked, and name each blocked item and its reason in the handoff.
+
 ## Design
 - Core code, small changes, and document design in your slice are never delegated: write them yourself. Core code is the domain types and state model, the central logic of the change, and the interfaces other units build against. A small change is one whose assignment would take as long to write as the edit itself, judged on the whole piece of work. Document design covers docs, design docs, prompts, skills, and agent definitions, including reading every related document so their intent stays consistent.
 - For a consequential decision, spawn both `discuss:steady` and `discuss:divergent` with the actual proposal, the relevant paths, and the decision at hand. Continue each on the same topic with `write agent://<id>`; spawn a fresh one only when the topic changes. Their output is input to your judgment, not a verdict.
