@@ -2,18 +2,26 @@ import { basename } from 'node:path';
 import { completeSimple } from '@oh-my-pi/pi-ai';
 import { type ExtensionAPI, type ExtensionContext, z } from '@oh-my-pi/pi-coding-agent';
 import { AgentRegistry } from '@oh-my-pi/pi-coding-agent/registry/agent-registry';
+import type { AgentSession } from '@oh-my-pi/pi-coding-agent/session/agent-session';
 
 /**
  * Completion judge for `task:low` / `task:mid` / `task:free` subagents. It runs
  * inside the subagent's own session and intercepts its terminal `yield` — the
  * one step every task run (sync or async) passes before its result reaches
- * the parent. A fast model compares the original assignment (plus the batch's
- * shared context) with the last 50 tool calls and the submitted result, and
- * decides whether the work was actually finished.
+ * the parent. A fast model compares the assignment (the `task` prompt the
+ * executor recorded in the run's `session_init`, plus the batch's shared
+ * context) with the last 50 tool calls the subagent made after that point and
+ * the submitted result, and decides whether the work was actually finished.
+ * A `fork_task` child's transcript opens with a copy of the parent's
+ * conversation; everything before its own `session_init` is background, never
+ * the assignment or the subagent's work.
  *
  * Per subagent session: the first terminal yield judged NOT done is blocked
- * and the reason goes back to the subagent, which keeps working. The next
- * terminal yield is judged again and always passes. Every yield that passes
+ * and the reason goes back to the subagent, which keeps working. A terminal
+ * yield judged DONE while the session's own todo list (see `subagent-todo.ts`)
+ * still has pending or in-progress items is blocked once, asking the subagent
+ * to bring the todo list up to date before yielding. Once a NOT done verdict
+ * has bounced, the next terminal yield always passes. Every yield that passes
  * after a definitive verdict carries it to the parent as
  * `data.completion_judge = { verdict, reason, bounced }`. Later yields in the
  * same session pass unjudged.
@@ -68,11 +76,13 @@ const toolCallBlockSchema = z
     .object({ type: z.literal('toolCall'), id: z.string(), name: z.string(), arguments: z.unknown() })
     .passthrough();
 
+/** Written by the task executor when the run starts; `task` is the exact prompt it dispatches. */
+const sessionInitEntrySchema = z.object({ type: z.literal('session_init'), task: z.string() }).passthrough();
+
 const messageEntrySchema = z
     .object({
         type: z.literal('message'),
         message: z.union([
-            z.object({ role: z.literal('user'), content: z.unknown() }).passthrough(),
             z.object({ role: z.literal('assistant'), content: z.array(z.unknown()) }).passthrough(),
             z
                 .object({
@@ -99,7 +109,12 @@ const openYieldParametersSchema = z
 
 // --- domain types ---
 
-type Round = 'bounced' | 'settled';
+/** Per subagent session; absent = not judged yet. */
+type Round =
+    | { readonly kind: 'open'; readonly bounced: boolean; readonly todoPrompted: boolean }
+    | { readonly kind: 'settled' };
+
+const FIRST_ROUND: Round = { kind: 'open', bounced: false, todoPrompted: false };
 
 type Verdict =
     | { readonly kind: 'done'; readonly reason: string }
@@ -160,19 +175,29 @@ const classifyYield = (input: YieldInput): YieldCall => {
     return data.success && !Array.isArray(input.data) ? { kind: 'data', data: data.data } : { kind: 'opaque' };
 };
 
-const readTranscript = (ctx: ExtensionContext): Transcript => {
-    let assignment = '';
+/**
+ * The run's own part of the branch: from the latest `session_init` on. Returns
+ * undefined when the branch has none, i.e. the session is not a task run.
+ */
+const readTranscript = (ctx: ExtensionContext): Transcript | undefined => {
+    let assignment: string | undefined;
     const calls: ToolCallRecord[] = [];
     const results = new Map<string, ToolResultRecord>();
     const assistantTextByCallId = new Map<string, string>();
     for (const entry of ctx.sessionManager.getBranch()) {
+        const init = sessionInitEntrySchema.safeParse(entry);
+        if (init.success) {
+            assignment = init.data.task;
+            calls.length = 0;
+            results.clear();
+            assistantTextByCallId.clear();
+            continue;
+        }
+        if (assignment === undefined) continue;
         const parsed = messageEntrySchema.safeParse(entry);
         if (!parsed.success) continue;
         const message = parsed.data.message;
         switch (message.role) {
-            case 'user':
-                if (assignment === '') assignment = textOf(message.content);
-                break;
             case 'assistant': {
                 const text = textOf(message.content);
                 for (const block of message.content) {
@@ -188,7 +213,7 @@ const readTranscript = (ctx: ExtensionContext): Transcript => {
                 break;
         }
     }
-    return { assignment, calls, results, assistantTextByCallId };
+    return assignment === undefined ? undefined : { assignment, calls, results, assistantTextByCallId };
 };
 
 /** The batch's shared `context` is rendered into the subagent system prompt as its `§ Context` section. */
@@ -270,8 +295,15 @@ const judge = async (ctx: ExtensionContext, prompt: string, signal: AbortSignal)
     }
 };
 
+/** Pending or in-progress items of the session's own todo list. */
+const openTodoItems = (session: AgentSession | null): string[] =>
+    (session?.getTodoPhases() ?? []).flatMap(phase =>
+        phase.tasks
+            .filter(task => task.status === 'pending' || task.status === 'in_progress')
+            .map(task => `${phase.name}: ${task.content}`),
+    );
+
 export default function taskCompletionJudge(pi: ExtensionAPI): void {
-    /** Per subagent session file: absent = not judged yet. */
     const rounds = new Map<string, Round>();
 
     const annotate = (
@@ -303,20 +335,27 @@ export default function taskCompletionJudge(pi: ExtensionAPI): void {
     ): Promise<{ block: true; reason: string } | { input: Record<string, unknown> } | undefined> => {
         const sessionFile = ctx.sessionManager.getSessionFile();
         if (sessionFile === undefined) return undefined;
-        const round = rounds.get(sessionFile);
-        if (round === 'settled') return undefined;
+        const round = rounds.get(sessionFile) ?? FIRST_ROUND;
+        if (round.kind === 'settled') return undefined;
         const parsedInput = yieldInputSchema.safeParse(rawInput);
         if (!parsedInput.success) return undefined;
         const input = parsedInput.data;
         const call = classifyYield(input);
         if (call.kind === 'not_terminal') return undefined;
         // Task session files are `<artifacts>/<agent-id>.jsonl`; the registry ref carries the agent definition name.
-        const agentName = AgentRegistry.global()
+        const ref = AgentRegistry.global()
             .list()
-            .find(ref => ref.sessionFile === sessionFile)?.displayName;
-        if (agentName === undefined || !Object.hasOwn(JUDGED_AGENTS, agentName)) return undefined;
+            .find(candidate => candidate.sessionFile === sessionFile);
+        if (ref === undefined || !Object.hasOwn(JUDGED_AGENTS, ref.displayName)) return undefined;
+        const agentName = ref.displayName;
 
         const transcript = readTranscript(ctx);
+        if (transcript === undefined) {
+            // No recorded assignment to judge against: let this and later yields pass.
+            pi.logger.info('task-completion-judge skipped: no session_init on branch', { agentName });
+            rounds.set(sessionFile, { kind: 'settled' });
+            return undefined;
+        }
         const assistantText = transcript.assistantTextByCallId.get(toolCallId);
         const submission = call.kind === 'text' ? (assistantText ?? '') : stringify(input.data);
         const verdict = await judge(
@@ -327,16 +366,17 @@ export default function taskCompletionJudge(pi: ExtensionAPI): void {
         pi.logger.info('task-completion-judge verdict', {
             agent: basename(sessionFile, '.jsonl'),
             agentName,
-            round: round ?? 'first',
+            bounced: round.bounced,
+            todoPrompted: round.todoPrompted,
             ...verdict,
         });
 
         if (verdict.kind === 'unknown') {
-            rounds.set(sessionFile, 'settled');
+            rounds.set(sessionFile, { kind: 'settled' });
             return undefined;
         }
-        if (verdict.kind === 'not_done' && round === undefined) {
-            rounds.set(sessionFile, 'bounced');
+        if (verdict.kind === 'not_done' && !round.bounced) {
+            rounds.set(sessionFile, { ...round, bounced: true });
             const reason = [
                 '完成度鉴定：对照最初的任务和你最近的 tool call，这次任务还没有真正完成，yield 被退回。',
                 verdict.reason || '(鉴定未给出具体原因)',
@@ -344,11 +384,21 @@ export default function taskCompletionJudge(pi: ExtensionAPI): void {
             ].join('\n');
             return { block: true, reason };
         }
-        rounds.set(sessionFile, 'settled');
+        const openItems = verdict.kind === 'done' && !round.todoPrompted ? openTodoItems(ref.session) : [];
+        if (openItems.length > 0) {
+            rounds.set(sessionFile, { ...round, todoPrompted: true });
+            const reason = [
+                '完成度鉴定：这次任务已经完成，但你的 todo 里还有未完成的项，yield 被退回：',
+                ...openItems.map(item => `- ${item}`),
+                '先维护 todo，让它反映真实进度，再调用 yield。',
+            ].join('\n');
+            return { block: true, reason };
+        }
+        rounds.set(sessionFile, { kind: 'settled' });
         const revised = annotate(input, call, assistantText, {
             verdict: verdict.kind,
             reason: verdict.reason,
-            bounced: round === 'bounced',
+            bounced: round.bounced,
         });
         return revised === undefined ? undefined : { input: revised };
     };
