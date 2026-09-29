@@ -73,7 +73,7 @@ flowchart LR
   `omp` executable (`.omp/commands/*.md`).
 - **Structured configs are managed in both directions, field by field.**
   `config.yml`, `settings.json`, the agent-root `thinking-translator.json`,
-  `extensions/lang-nag.json`, and `pi-bansos-relay-state.json` are regular items
+  `extensions/lang-nag.json`, `extensions/input-polish.json`, and `pi-bansos-relay-state.json` are regular items
   of both commands: each side reads
   both files, diffs fields, and edits only the differing lines — never a
   whole-file overwrite or re-serialization. `config.yml`'s machine-local fields
@@ -90,7 +90,7 @@ flowchart LR
 | Path | Purpose |
 | --- | --- |
 | `agent/` | Managed harness config. Only listed items are portable; the whole dir is **not**. |
-| `agent/extensions/` | Local TypeScript extensions (the code core). 19 `.ts` (incl. `bro.ts`, the built-in-AI rewrite of the former `pi-bro` plugin, `watchdog-agent.ts`, `fork-task.ts`, which seeds native `task` children with a copy of the caller's conversation, `task-split-check.ts`, which blocks main-agent `task` calls whose items cover more than one topic, and any `task`/`fork_task` call that caps a `task:*` worker's report length, `subagent-todo.ts`, which gives each `task:*` worker its own native `todo` tool that OMP strips from subagents, and `task-completion-judge.ts`, which bounces a `task:low`/`task:mid`/`task:free` worker's first final `yield` once when a model judges the slice unfinished, and once more when it is finished but the worker's todo list still has open items) + `doc-polish.json`/`lang-nag.json` sidecars (`lang-nag.json` is synced both ways; `doc-polish.json` is machine-local/prompt-overridable — see Important Files). |
+| `agent/extensions/` | Local TypeScript extensions (the code core). 20 `.ts` (incl. `bro.ts`, the built-in-AI rewrite of the former `pi-bro` plugin, `input-polish.ts`, which polishes the input-box draft on the configured chord (default Ctrl+Enter) and shows the result in an overlay over the input box, where Enter sends it and Esc discards it, `watchdog-agent.ts`, `fork-task.ts`, which seeds native `task` children with a copy of the caller's conversation, `task-split-check.ts`, which blocks main-agent `task` calls whose items cover more than one topic, and any `task`/`fork_task` call that caps a `task:*` worker's report length, `subagent-todo.ts`, which gives each `task:*` worker its own native `todo` tool that OMP strips from subagents, and `task-completion-judge.ts`, which bounces a `task:low`/`task:mid`/`task:free` worker's first final `yield` once when a model judges the slice unfinished, and once more when it is finished but the worker's todo list still has open items) + `doc-polish.json`/`input-polish.json`/`lang-nag.json` sidecars (`input-polish.json` and `lang-nag.json` are synced both ways; `doc-polish.json` is machine-local/prompt-overridable — see Important Files). |
 | `agent/agents/` | Custom subagent definitions (`*.md`) + `README.txt` authoring pitfalls. |
 | `agent/thinking-translator.json` | Agent-root translator config for `omp-thinking-translator`. Portable regular item: `/sync-omp-config` carries machine → repo, `/update-omp` carries repo → machine. |
 | `pi/agent/pi-bansos-relay-state.json` | `pi-bansos` plugin state (relay on/off, relay URL, saved relays, `statusBar`), read by the plugin from `~/.pi/agent/`, not `~/.omp/agent`. Written by the plugin's `/bansos` command; no credentials. Portable regular item in both directions. |
@@ -166,7 +166,7 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
   `pi-catalog` fail to load. Node built-ins (`node:fs`, `node:path`,
   `node:crypto`, ...) are used heavily.
 - **Helper sessions pass `taskDepth: 1`:** every `createAgentSession` an
-  extension builds for its own model calls (`bro.ts`, `doc-polish.ts`,
+  extension builds for its own model calls (`bro.ts`, `doc-polish.ts`, `input-polish.ts`,
   `lang-nag.ts`, `watchdog-agent.ts` chat reviewer, `fork-task.ts`) sets `taskDepth: 1`.
   Without it the SDK classifies the helper as a main session, and its
   `dispose()` tears down the global `AgentLifecycleManager`, releasing every
@@ -223,7 +223,7 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
   never receive it, so rules they need are repeated in the `task:*` definitions.
 - `agent/config-light.yml` — declarative light-mode config overlay: disables eleven
   optional behavior extensions (including `task-completion-judge`); the other
-  eight (`bro`, `repo-rules`, `subagent-todo`, and five compatibility fixes) stay
+  nine (`bro`, `input-polish`, `repo-rules`, `subagent-todo`, and five compatibility fixes) stay
   loaded, as listed in `README.md`.
 - `agent/APPEND_SYSTEM_LIGHT.md` — system-prompt appendix used only by
   `omp-light` (currently empty); the normal `APPEND_SYSTEM.md` remains the full-mode prompt.

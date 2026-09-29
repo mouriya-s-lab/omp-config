@@ -21,6 +21,7 @@ description: 用本仓库快照更新本机 OMP 配置和 pi-bansos 状态（rep
 | `agent/agents/` | `agents/` | `diff -rq` 确认范围后覆盖 |
 | `agent/extensions/*.ts` | `extensions/` | 同名覆盖、缺的补齐，见「扩展」 |
 | `agent/extensions/lang-nag.json` | 同名 | 只改有差异的字段 |
+| `agent/extensions/input-polish.json` | 同名 | 只改有差异的字段 |
 | `agent/config-light.yml`、`agent/APPEND_SYSTEM_LIGHT.md`、`agent/omp-light.ts` | 同名 | 三件整体更新并安装入口，见「Light 启动器」 |
 | `pi/agent/pi-bansos-relay-state.json` | `~/.pi/agent/pi-bansos-relay-state.json` | 本机已有时只改有差异的字段；缺失时 `mkdir -p ~/.pi/agent` 后复制 |
 | `install-plugins.sh` 的插件列表 | 已装插件 | 见「插件」 |
@@ -59,6 +60,6 @@ agent 定义和 `config.yml` 里的模型绑定必须一起更新；只更新一
 ## 校验与报告
 
 - 复制的文件与仓库 `cmp` 一致；编辑过的结构化配置，除本机字段外与仓库逐字段一致；安装入口检查内容、权限和解析路径。
-- 动过的 YAML/JSON 两端都要能解析：`config.yml`、`config-light.yml` 用 `Bun.YAML.parse`，`settings.json`、`thinking-translator.json`、`lang-nag.json`、`pi-bansos-relay-state.json` 用 `JSON.parse`。
+- 动过的 YAML/JSON 两端都要能解析：`config.yml`、`config-light.yml` 用 `Bun.YAML.parse`，`settings.json`、`thinking-translator.json`、`lang-nag.json`、`input-polish.json`、`pi-bansos-relay-state.json` 用 `JSON.parse`。
 - 不打印凭据，不把明文凭据写进本机。
 - 报告改了哪些文件、装卸了哪些插件、哪些项因等待确认被跳过，并提醒重启 OMP：APPEND_SYSTEM、扩展、插件在下次启动时加载；`pi-bansos-relay-state.json` 在已运行的会话里要到下次会话启动或下一次 `/bansos` 改动时才生效。

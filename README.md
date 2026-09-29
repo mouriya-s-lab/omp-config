@@ -21,7 +21,7 @@ Oh My Pi（OMP）配置中可以审查、可以迁移的部分，为重型编程
 |`agent/config-light.yml`、`agent/APPEND_SYSTEM_LIGHT.md`、`agent/omp-light.ts`|轻量模式的配置覆盖、追加提示词（目前为空）、入口源码|`~/.omp/agent/`|
 |`agent/thinking-translator.json`|`omp-thinking-translator` 插件配置|`~/.omp/agent/`|
 |`agent/agents/`|subagent 定义；`README.txt` 记录编写陷阱|`~/.omp/agent/agents/`|
-|`agent/extensions/`|本地扩展，以及 `lang-nag.json`、`doc-polish.json` 两个扩展配置|`~/.omp/agent/extensions/`|
+|`agent/extensions/`|本地扩展，以及 `lang-nag.json`、`input-polish.json`、`doc-polish.json` 三个扩展配置|`~/.omp/agent/extensions/`|
 |`pi/agent/pi-bansos-relay-state.json`|`pi-bansos` 插件状态|`~/.pi/agent/`|
 |`install-plugins.sh`、`plugin-audit.sh`|插件安装、插件漂移检查|—|
 |`.omp/commands/`|三个维护命令的完整规则|—|
@@ -111,7 +111,7 @@ flowchart LR
 
 ### 两个方向共同的规则
 
-- **结构化配置按字段合并。** `config.yml`、`settings.json`、`thinking-translator.json`、`extensions/lang-nag.json`、`pi-bansos-relay-state.json` 先读两边、比出有差异的字段，只改这些行，不整文件覆盖，也不重新序列化。改完用 `bun -e` 确认两端都能解析：YAML 用 `Bun.YAML.parse`，JSON 用 `JSON.parse`。
+- **结构化配置按字段合并。** `config.yml`、`settings.json`、`thinking-translator.json`、`extensions/lang-nag.json`、`extensions/input-polish.json`、`pi-bansos-relay-state.json` 先读两边、比出有差异的字段，只改这些行，不整文件覆盖，也不重新序列化。改完用 `bun -e` 确认两端都能解析：YAML 用 `Bun.YAML.parse`，JSON 用 `JSON.parse`。
 - **`config.yml` 的本机字段两个方向都不动**，例如 `modelRoles`、`theme`、`compaction.thresholdTokens`，完整列表见 `.omp/commands/sync-omp-config.md`。
 - **应用托管的扩展两个方向都跳过**：首行为 `// @orca-managed-pi-extension`，或任意位置含 `marker: _otty`。以标记为准，不看文件名。这类文件（如 `orca-*.ts`、`otty-integration.ts`）由 Orca、Otty 自己安装和改写。
 - **运行时文件不迁移**：`*.db*`、WAL、`*.lock`、`models.yml`（含 API key）、`commandcode-models.json`（本机生成）、`last-changelog-version`、`sessions/`、`terminal-sessions/`、`blobs/`、`cache/`、日志。
@@ -120,7 +120,7 @@ flowchart LR
 
 |项目|处理方式|
 |---|---|
-|`config.yml`、`settings.json`、`thinking-translator.json`、`extensions/lang-nag.json`|按字段合并|
+|`config.yml`、`settings.json`、`thinking-translator.json`、`extensions/lang-nag.json`、`extensions/input-polish.json`|按字段合并|
 |`APPEND_SYSTEM.md`|直接覆盖|
 |`agents/`|`diff -rq` 确认范围后覆盖；和 `config.yml` 里的模型绑定一起更新，避免 agent 名和模型对不上|
 |`extensions/*.ts`|同名覆盖、缺的补齐；本机多出来的扩展不删|
@@ -136,7 +136,7 @@ flowchart LR
 
 只读本机，不写 `~/.omp`、`~/.pi`、`omp` 安装目录、PATH 或 shell 配置，本机文件的 mtime 前后不变。
 
-- **范围**：`config.yml`、`settings.json`、`APPEND_SYSTEM.md`、`thinking-translator.json`、轻量模式三项资产、`agents/`、`extensions/*.ts`、`extensions/lang-nag.json`，以及 `~/.pi/agent/pi-bansos-relay-state.json`。
+- **范围**：`config.yml`、`settings.json`、`APPEND_SYSTEM.md`、`thinking-translator.json`、轻量模式三项资产、`agents/`、`extensions/*.ts`、`extensions/lang-nag.json`、`extensions/input-polish.json`，以及 `~/.pi/agent/pi-bansos-relay-state.json`。
 - **不收回**：安装到 `omp` 旁边的 `omp-light` / `omp-light.cmd`（轻量模式三项只从 `~/.omp/agent` 取）；`extensions/doc-polish.json`。
 - 本机没有 `pi-bansos-relay-state.json`（从没用 `/bansos` 改过设置）时，不算“本机已删除”，仓库保持原样。
 - `~/.omp/plugins/package.json` 的依赖和 `install-plugins.sh` 不一致时，重写脚本里的插件列表：URL/Git 依赖原样保留，npm 依赖去掉版本号。
@@ -213,7 +213,7 @@ git status --short
 
 - 用 `APPEND_SYSTEM_LIGHT.md` 代替完整的追加提示词。
 - 按 `config-light.yml` 禁用 11 个行为扩展：`ctx-post-compact-hint`、`ctx-tasklog`、`ctx-tool`、`doc-polish`、`fork-task`、`isolation-nudge`、`lang-nag`、`task-completion-judge`、`task-split-check`、`tool-policy-nag`、`watchdog-agent`。
-- 其余 8 个扩展照常加载：`bro`、`repo-rules`、`subagent-todo`，以及五个兼容性修复（`commandcode-model-spec`、`commandcode-usage`、`unified-exec-bun-pty`、`v2-compaction-timeout`、`xai-oauth-cost-ticks`）。
+- 其余 9 个扩展照常加载：`bro`、`input-polish`、`repo-rules`、`subagent-todo`，以及五个兼容性修复（`commandcode-model-spec`、`commandcode-usage`、`unified-exec-bun-pty`、`v2-compaction-timeout`、`xai-oauth-cost-ticks`）。
 - 插件、工具、rules、skills、上下文文件，以及 model、thinking、profile、auth、session 设置都不变。
 - `omp-light` 后面的参数原样传给 `omp`，可以覆盖入口预设的同名参数。
 
@@ -306,6 +306,7 @@ harness 会把 `APPEND_SYSTEM.md` 和每个 agent 的 `description` 都注入主
 |[ctx-post-compact-hint](#ctx-post-compact-hint)|compact 后强制注入 `ctx` 概览和当前任务记录|否|
 |[doc-polish](#doc-polish)|`polish_doc` / `/polish-doc`：不改原意地润色文档|否|
 |[bro](#bro)|`/bro`：把回复、文档或网页改写成易懂的解释|是|
+|[input-polish](#input-polish)|`Ctrl+Enter` 润色输入框草稿，overlay 预览后回车发送、Esc 取消|是|
 |[commandcode-model-spec](#commandcode-model-spec)|修复 `--model` 指定 commandcode 模型时的认证失败|是|
 |[commandcode-usage](#commandcode-usage)|显示 Command Code 额度|是|
 |[unified-exec-bun-pty](#unified-exec-bun-pty)|让 `exec_command` 在 darwin-arm64 上支持 `tty: true`|是|
@@ -578,6 +579,25 @@ overlay 里上下键或滚轮滚动，`C` 复制到系统剪贴板，`R` 重新�
 - **自定义 prompt**：agent 目录下的 `bro-prompt.md`，必须恰好包含一次 `{{response}}`。存在且有效时完全替代内置模式的 prompt；无效时阻止解释，用 `/bro doctor` 查原因。
 - **辅助会话**：无工具、内存会话、不加载扩展。
 
+#### input-polish
+
+`input-polish.ts` 只作用于主会话的交互式 TUI。在输入框按配置的组合键（默认 `Ctrl+Enter`）代替回车，就用模型润色草稿。润色结果不写进输入框，而是在输入框位置的 overlay 里流式显示，输入框始终保留原文。
+
+|按键|效果|
+|---|---|
+|组合键|开始润色，overlay 里流式显示改写|
+|`Enter`|输入框换成润色稿，同一次回车交给输入框提交，走原有提交路径（历史、图片、流式中的 steer、`input` 钩子）|
+|`Esc` / `Ctrl+C`|中止润色，关闭 overlay，输入框保持原文|
+
+润色期间和预览期间的按键都由 raw terminal-input 监听先处理：`Enter` 只在润色完成后生效，其余按键（包括重复的组合键）吞掉，不会漏进输入框。`Enter` 接受时先关闭 overlay，让焦点回到输入框，再改输入框文字并放行这次回车。
+
+- **配置** `input-polish.json`：`model`、`instruction` 必填。`model` 可带 `:effort` 后缀指定 thinking，不带则关闭；`instruction` 是改写要求，只写在这个文件里，扩展代码里没有默认值，固定的保真规则由扩展另行附加，不受它影响；`key` 可选，取 `ctrl+enter`（默认）或 `alt+enter`。cwd 下的文件优先于扩展目录下的，只在会话开始或切换时读取；缺失或格式错误（包括缺 `instruction`）时扩展不生效。仓库里的值是 `opencode-go/muse-spark-1.3-contributor:high`、`ctrl+enter`，以及“在不改变原意的前提下，改写到听起来会让人更加想努力、能激动人心，但不要太夸张。”
+- **键位**：`ctrl+enter` 要求终端能把它和回车区分开（Kitty 键盘协议或 modifyOtherKeys）；区分不了的终端里它和回车一样，扩展触发不了，改用 `alt+enter`（macOS 上的 Option+Enter，终端需把 Option 当 Meta）。组合键在草稿会被润色时盖过 OMP 默认的 follow-up 绑定 `ctrl+enter`；`Ctrl+Q` 发送 follow-up 不受影响。
+- **不润色的草稿**：空草稿，以 `/`（斜杠命令）、`!`（bash）、`$`（python）开头的草稿。这些情况组合键原样交给 OMP。
+- **保真**：prompt 要求保留原语言、代码、路径、标识符和 `[Paste #N …]`、`[Image #N …]` 占位符，不新增也不丢失要求。改写里占位符缺失或被改动时按失败处理，不应用。
+- **失败**：模型不可用（弹警告）、请求失败、输出为空、占位符对不上；overlay 显示原因，`Esc` 关闭，输入框不变。
+- **辅助会话**：无工具、内存会话、空 system prompt、不加载扩展、`taskDepth: 1`。每次润色消耗一次所选模型的请求。
+
 ### 兼容性修复
 
 #### commandcode-model-spec
@@ -639,6 +659,6 @@ rm -f "$pty_root/build-failure.txt"
 ## 维护须知
 
 - **没有测试和 CI。** 扩展改动的唯一证明是运行时验证：用 `/update-omp` 应用，重启 OMP，实际触发对应的工具、命令或钩子，看输出和副作用。
-- **扩展建的辅助会话必须传 `taskDepth: 1`。** 目前有五处：`bro`、`doc-polish`、`lang-nag`、`watchdog-agent` 的聊天 reviewer、`fork-task` 的 shake。不传的话 SDK 把它当主会话，`dispose()` 时会销毁全局 `AgentLifecycleManager`，所有空闲 subagent 变成 `Unknown agent`，无法再续聊。`lang-nag` 几乎每轮都建辅助会话，漏传会让 subagent 很快失联。只调用 `completeSimple` 的扩展（`task-split-check`、`task-completion-judge`）不建会话，不涉及这条。
+- **扩展建的辅助会话必须传 `taskDepth: 1`。** 目前有六处：`bro`、`doc-polish`、`input-polish`、`lang-nag`、`watchdog-agent` 的聊天 reviewer、`fork-task` 的 shake。不传的话 SDK 把它当主会话，`dispose()` 时会销毁全局 `AgentLifecycleManager`，所有空闲 subagent 变成 `Unknown agent`，无法再续聊。`lang-nag` 几乎每轮都建辅助会话，漏传会让 subagent 很快失联。只调用 `completeSimple` 的扩展（`task-split-check`、`task-completion-judge`）不建会话，不涉及这条。
 - **升级 OMP 后**，在真实 TUI 里重新验证 [fork-task](#fork-task) 和 [subagent-todo](#subagent-todo)，它们依赖 OMP 内部实现（`AgentRegistry`、子会话文件路径、钩子顺序、宿主工具注入、`TodoTool` 读写的会话接口）。
 - **改 agent 定义前**读 `agent/agents/README.txt`；目录里的笔记用 `.txt`，不要用 `.md`。
