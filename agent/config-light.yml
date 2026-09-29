@@ -6,6 +6,7 @@ disabledExtensions:
   - extension-module:fork-task
   - extension-module:isolation-nudge
   - extension-module:lang-nag
+  - extension-module:task-completion-judge
   - extension-module:task-split-check
   - extension-module:tool-policy-nag
   - extension-module:watchdog-agent
