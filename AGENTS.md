@@ -90,7 +90,7 @@ flowchart LR
 | Path | Purpose |
 | --- | --- |
 | `agent/` | Managed harness config. Only listed items are portable; the whole dir is **not**. |
-| `agent/extensions/` | Local TypeScript extensions (the code core). 17 `.ts` (incl. `bro.ts`, the built-in-AI rewrite of the former `pi-bro` plugin, `watchdog-agent.ts`, `fork-task.ts`, which seeds native `task` children with a copy of the caller's conversation, and `task-split-check.ts`, which blocks main-agent `task` calls whose items cover more than one topic, and any `task`/`fork_task` call that caps a `task:*` worker's report length) + `doc-polish.json`/`lang-nag.json` sidecars (`lang-nag.json` is synced both ways; `doc-polish.json` is machine-local/prompt-overridable — see Important Files). |
+| `agent/extensions/` | Local TypeScript extensions (the code core). 19 `.ts` (incl. `bro.ts`, the built-in-AI rewrite of the former `pi-bro` plugin, `watchdog-agent.ts`, `fork-task.ts`, which seeds native `task` children with a copy of the caller's conversation, `task-split-check.ts`, which blocks main-agent `task` calls whose items cover more than one topic, and any `task`/`fork_task` call that caps a `task:*` worker's report length, `subagent-todo.ts`, which gives each `task:*` worker its own native `todo` tool that OMP strips from subagents, and `task-completion-judge.ts`, which bounces a `task:low`/`task:mid`/`task:free` worker's first final `yield` once when a model judges the slice unfinished, and once more when it is finished but the worker's todo list still has open items) + `doc-polish.json`/`lang-nag.json` sidecars (`lang-nag.json` is synced both ways; `doc-polish.json` is machine-local/prompt-overridable — see Important Files). |
 | `agent/agents/` | Custom subagent definitions (`*.md`) + `README.txt` authoring pitfalls. |
 | `agent/thinking-translator.json` | Agent-root translator config for `omp-thinking-translator`. Portable regular item: `/sync-omp-config` carries machine → repo, `/update-omp` carries repo → machine. |
 | `pi/agent/pi-bansos-relay-state.json` | `pi-bansos` plugin state (relay on/off, relay URL, saved relays, `statusBar`), read by the plugin from `~/.pi/agent/`, not `~/.omp/agent`. Written by the plugin's `/bansos` command; no credentials. Portable regular item in both directions. |
@@ -214,18 +214,19 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
   `task.agentModelOverrides` (model/fallback chains per tier),
   `task.disabledAgents`, `compaction.methodOrder` (`compaction.thresholdTokens` is machine-local),
   feature toggles (`astGrep.enabled: true`, `github.enabled: true`,
-  `fetch.enabled: false`, `browser.enabled: false`).
+  `fetch.enabled: true`, `browser.enabled: false`).
 - `agent/settings.json` — minimal legacy extension path: `{"extensions": ["~/.claude"]}`.
 - `agent/APPEND_SYSTEM.md` — global system-prompt appendix (user-instruction precedence, orchestration stance,
   no-token-saving rule, design-document read-in-full rule, spawn briefing, agent chat and lifecycle,
   `task` vs `fork_task`, agent tiers, shared-checkout vs `isolated: true` rules,
   tool policy). Task children
   never receive it, so rules they need are repeated in the `task:*` definitions.
-- `agent/config-light.yml` — declarative light-mode config overlay: disables ten
-  optional behavior extensions while retaining the three core extensions and four
-  compatibility/runtime fixes described in `README.md`.
-- `agent/APPEND_SYSTEM_LIGHT.md` — short system-prompt appendix used only by
-  `omp-light`; the normal `APPEND_SYSTEM.md` remains the full-mode prompt.
+- `agent/config-light.yml` — declarative light-mode config overlay: disables eleven
+  optional behavior extensions (including `task-completion-judge`); the other
+  eight (`bro`, `repo-rules`, `subagent-todo`, and five compatibility fixes) stay
+  loaded, as listed in `README.md`.
+- `agent/APPEND_SYSTEM_LIGHT.md` — system-prompt appendix used only by
+  `omp-light` (currently empty); the normal `APPEND_SYSTEM.md` remains the full-mode prompt.
 - `agent/omp-light.ts` — portable `#!/usr/bin/env bun` launcher source. `/update-omp`
   installs it as executable `omp-light` on POSIX/macOS/Linux, or as
   `omp-light.ts` plus a generated `omp-light.cmd` on Windows, beside the resolved
