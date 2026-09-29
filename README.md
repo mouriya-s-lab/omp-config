@@ -48,39 +48,43 @@ Oh My Pi（OMP）配置中可以审查、可以迁移的部分，为重型编程
 
 ### 约束模型行为
 
-**hashline edit 是副作用规范。** 以 Claude 为首的模型在对齐训练中变得非常自负，认定自己随手写的命令完美无缺，用不着传统的 hashline edit。hashline edit 其实是一种副作用规范：必须先读一次，并且必须指定编辑范围；因为必须先读，所以它并发安全。`agent/APPEND_SYSTEM.md` 的 `# Tool Call` 一节用了很大篇幅设计这部分。
+这套约束不假设模型会稳定遵循 system prompt。实际使用中，以 Claude 为首的模型会选择性执行其中的规则；一旦开始绕开工具调用规范，其他约束（包括 `CLAUDE.md` 和 `*.rule.md`）也往往一起失效。仓库因此同时约束副作用、检测偏离，并在运行时补充提醒。
 
-**非法工具调用就是偏离的信号。** 以 Claude 为首的模型会无视 system prompt，不管它以什么方式注入：对齐让模型选择性地遵守，而用户指令的分量远大于 system prompt。这些模型本来就不太遵守工具指令，而不遵守工具指令时，往往也不遵守其他部分，包括所有 CLAUDE.md 和 `*.rule.md`。两者一体两面，所以用非法工具调用检测模型是否偏离了 system prompt。目标不是让模型完美地按古典方式调用工具，而是时刻敲打，不让它偏离正轨（[tool-policy-nag](#tool-policy-nag)）。
+**用 hashline edit 约束副作用。** hashline edit 要求先读取当前文件，再明确指定编辑范围；写操作因此绑定到已经观察过的快照，而不是依赖模型确信自己的一次性命令不会出错。这能降低并发修改后的误写和覆盖风险。具体规范见 `agent/APPEND_SYSTEM.md` 的 `# Tool Call`。
 
-**watchdog。** 围绕模型日常行为的另一项大型定制。watchdog 是第三方观察者，全自动观察 context，可以注入任何内容。它同样利用用户指令优先级更高这一点实现运行时注入。它相当于 Claude 的 `/advisor`，但适用场景更宽。判定选项较少时，另加 Jev 后端的 watchdog（[watchdog-agent](#watchdog-agent)）。
+**在完整模式中，把 todo 与 ctx 作为一套联合工具。** todo 负责维护任务生命周期；OMP 的原生机制会在普通结束路径上发现 todo 尚未完成时要求 agent 继续，因此不必靠 loop 反复注入 prompt。它也会减少因小挫折而过早询问用户：没有明确标记为 blocked 的任务继续由 agent 处理。自动继续存在误判风险，但这里选择承担这项风险，而不是频繁中断操作员。
 
-**语言提醒。** Claude 的 server compact 一直有问题，典型的是重新注入的 system prompt 不知为何失效，其中的语言设置会被无视。所以改用另一种方式提醒模型该用哪种语言回答（[lang-nag](#lang-nag)）。
+每次成功的 todo 修改都会被 `ctx-tasklog` 捕获；`ctx` 按这些事件重放任务的最终状态，形成不依赖模型自行总结的简短行事记录。主会话发生 compact 后，`ctx-post-compact-hint` 会把这份记录连同 context 树强制注入新 context。OMP 原生不给 subagent todo，[subagent-todo](#subagent-todo) 为 `task:*` worker 补上该工具，使从 todo、task log 到 ctx 的同一条链路覆盖 subagent；worker 定义同时要求每个切片都维护自己的 todo。
 
-**强制使用 todo。** todo 是 OMP 最重要的工具之一：todo 没做完而 agent 要结束时，它会主动把 agent 打回去，催它继续。这相当于另一种 `/goal`，但不靠 loop 重复注入 prompt，设计非常聪明。所以 todo 是强制的：它保证长程任务做完，不信任任何模型的自我意志力。它还能减少模型莫名其妙的提问：模型在 todo 进行中因为很小的挫折去问用户、却没有标记 block 时，todo 会直接让它继续，用户什么都没输入，由模型自己判断。这个默认行为略有风险，但代价比停下来略小。OMP 原生不给 subagent todo，[subagent-todo](#subagent-todo) 给 `task:*` worker 补上；它们的定义同样要求每个切片都用 todo。
+**把非法工具调用当作整体偏离的信号。** [tool-policy-nag](#tool-policy-nag) 检测模型是否绕开内置工具，只计数和提醒，不拦截命令。目标不是追求形式上完美的“古典”工具调用，而是在偏离扩散到其他规则之前及时校正。
+
+**用 watchdog 做独立的运行时审阅。** watchdog 作为第三方观察者自动读取 context，并按规则注入提醒；作用类似 Claude 的 `/advisor`，但目标、触发和投放方式更广。判定选项较少时，同一个 watchdog 可以改用 Jev 后端（[watchdog-agent](#watchdog-agent)）。
+
+**单独补偿语言设置丢失。** Claude 的 server compact 之后，重新注入的 system prompt 可能没有恢复语言约束。[lang-nag](#lang-nag) 因此独立检查回复语言，并在下一次输入前补充提醒；它不改写已经发出的回复。
 
 ### Context 管理
 
-**尽量减少 compact。** 长程任务中，每一次 compact 都应视为不可接受。而目前模型厂商主动削减 context 的做法都有很大的问题：
+**把 context 视为意图状态。** context 不只是文件内容，还包含需求、取舍、已确认的事实，以及与人类对齐过的意图。compact 会压缩这些信息，所以长程任务中的每次 compact 都是高损耗操作，应尽量避免。
 
-- 用 grep 代替完整阅读文件：片面的信息会强化模型的错误认识。
-- 把很长的命令拼成一次 bash 调用：长命令的副作用不可靠。
-- 外部命令返回多少内容不可控：典型的是 git 查询，分支列表可能因多次迭代有几百条，直接运行不可取；而用 `tail` 或 `head` 截断，任何形式都有问题。
+不能用同样有损的手段换取表面上的 context 节省：
 
-很多工具实现了分页并有默认排序，模型会无视它们。要尽可能用上，确保不跑偏。
+- 用 grep 代替完整阅读，会让片面信息固化成错误认识。
+- 把许多操作拼成一次长 bash，会扩大副作用并降低失败时的可判断性。
+- 外部命令的输出量可能失控；例如 git 分支经过多轮迭代后可达数百条，但直接用 `head` 或 `tail` 截断同样会丢失关键证据。
 
-**context 是意图的集合体。** 减少 compact 的另一个办法来自这个认识：context 本身就是意图的集合体，一 compact 就会丢失。无论做什么事，意图都必须留在同一个 context 里，所以识别哪些 context 可以抛弃很重要。subagent 的核心是 context 管理：subagent 的 context 是可以丢弃的分支，重要信息通过 subagent IRC 传回，由主 agent 自己整理。compact 之后，主 agent 用 [ctx 系列扩展](#context-恢复)找回之前的进度。
+应优先使用工具自带的分页和默认排序，在控制输出规模的同时保留可追溯的读取边界。
 
-**文档和核心代码由主 agent 做。** 代码任务中，意图最重要的载体是文档和核心代码，所以这两部分强制由主 agent 做（`agent/APPEND_SYSTEM.md` 的 `# Operating stance`）。
+**把可丢弃的工作放进 subagent context。** subagent 的 context 是可抛弃的工作分支；重要结论和证据通过 subagent IRC 返回，由主 agent 整理并写回自己的 context。这样丢弃的是执行过程，不是任务意图。
 
-**把 context fork 给 subagent。** subagent 很多时候并不是从零开会话更好。典型的是巨型设计变更：超过 150 万字的纯设计书可以全量加载进 context，但靠一个 context 完成所有事情不现实；而这个 context 包含全部知识，带着它做小任务会准确得多，不需要猜任何事。把 context fork 给 subagent，可以让它聚焦于一部分工作，同时带着全部背景。
+**由意图负责人写文档和核心代码。** 代码任务中，文档和核心代码是设计意图的主要载体，因此每一层的当前负责人必须亲自完成，不能把设计责任下放给 worker。完整规则见 `agent/APPEND_SYSTEM.md` 的 `# Operating stance`。
 
-很多场景需要的不是文件内容，而是和人类对齐过的意图。意图通常在 context 里工具调用以外的部分，只让 subagent 带上这部分是可行的。这是 `fork_task` 给原有 `task` 工具补充的核心思路（[fork-task](#fork-task)）。
+**需要完整背景时 fork context。** 即使超过 150 万字的纯设计材料能够一次装入 context，也不适合让一个会话承担全部实现。把现有 context fork 给 subagent，可以让它聚焦局部任务，同时保留文件之外、已经与人类对齐的意图；这正是 `fork_task` 对原有 `task` 的补充（[fork-task](#fork-task)）。如果主 context 最终仍发生 compact，ctx 联合链路会把 context 树和由 todo 重放得到的任务记录强制注入压缩后的会话；它恢复的是已记录的进度，不是假定压缩能够无损保留原始意图。
 
 ### Subagent 分档
 
-现在很多模型纯写代码的能力很强，但这只说明模型内部有好代码，不说明它智商高。这类模型由人类操控是对齐地狱，却可能是很好的 subagent 机器。这种分工是 task 分档的核心。但这种分类意图不能让 agent 察觉，否则它会偏心；而 agent 对实际花出去的钱更敏感。所以对 subagent 能力的描述是刻意模糊的（见 [Subagent 体系](#subagent-体系)）。
+模型的代码生成能力不等于整体判断力、规划能力或约束遵循能力。有些模型不适合由人类直接驱动，却能在边界明确的切片中成为高效 worker；task 分档据此区分成本与所需可信度。显式能力标签又可能影响 agent 的选择偏好，而实际费用同样会影响派发，所以能力描述刻意保持模糊（见 [Subagent 体系](#subagent-体系)）。
 
-低阶模型也有很多问题，典型的是根本没做完就汇报做完了。[task-completion-judge](#task-completion-judge) 在 worker 交付前审一次完成度；[task-split-check](#task-split-check) 让每个派发只含一个主题，降低事后核对的难度。
+低阶模型还可能在工作未完成时直接交付。[task-completion-judge](#task-completion-judge) 在这类 worker 交付前检查完成度；[task-split-check](#task-split-check) 推动每次派发只覆盖一个主题，以降低验收和核对成本。
 
 ### 其余扩展
 
@@ -295,11 +299,11 @@ harness 会把 `APPEND_SYSTEM.md` 和每个 agent 的 `description` 都注入主
 |[fork-task](#fork-task)|注册 `fork_task`：带着当前对话副本派 subagent|否|
 |[isolation-nudge](#isolation-nudge)|多个写入者共用目录时拦一次|否|
 |[task-split-check](#task-split-check)|拦下多主题派发和限制汇报长度的派发|否|
-|[subagent-todo](#subagent-todo)|给 `task:*` worker 补上 OMP 原生去掉的 `todo`|是|
+|[subagent-todo](#subagent-todo)|给 `task:*` worker 补上 `todo`，接入 todo / ctx 联合链路|是|
 |[task-completion-judge](#task-completion-judge)|worker 交付前审一次完成度|否|
-|[ctx-tool](#ctx-tool)|注册只读 `ctx` 工具，查看上下文树|否|
-|[ctx-tasklog](#ctx-tasklog)|记录 todo / goal 操作，供 `ctx` 使用|否|
-|[ctx-post-compact-hint](#ctx-post-compact-hint)|compact 后自动附上 `ctx` 概览|否|
+|[ctx-tool](#ctx-tool)|注册只读 `ctx` 工具，汇总上下文树并重放 todo 行事记录|否|
+|[ctx-tasklog](#ctx-tasklog)|捕获成功的 todo / goal 修改，形成 `ctx` 的派生记录|否|
+|[ctx-post-compact-hint](#ctx-post-compact-hint)|compact 后强制注入 `ctx` 概览和当前任务记录|否|
 |[doc-polish](#doc-polish)|`polish_doc` / `/polish-doc`：不改原意地润色文档|否|
 |[bro](#bro)|`/bro`：把回复、文档或网页改写成易懂的解释|是|
 |[commandcode-model-spec](#commandcode-model-spec)|修复 `--model` 指定 commandcode 模型时的认证失败|是|
@@ -481,6 +485,7 @@ option.blocker.delivery: steer
 
 - **状态本来就按会话隔离**：每个 `AgentSession` 有自己的 `TodoTracker`，停止时的完成度提醒、中途提醒和分支恢复都只看所在会话，subagent 的 todo 不会碰到父会话的列表。
 - **做法**：每次 `before_agent_start`（执行器过滤之后）通过 agent registry 找到本会话的 `AgentSession`，把绑定到该会话的原生 `TodoTool` 作为宿主工具装上。工具名仍是 `todo`，结果的持久化和恢复与内置工具一样。已经有 `todo` 的会话（主会话、启用了 prewalk 的 subagent）和 `task:*` 以外的 agent 不处理。
+- **和 ctx 的关系**：`TodoTracker` 仍是所在会话当前 todo 状态的源头；在完整模式中，每次成功修改由 `ctx-tasklog` 追加为派生事件记录，`ctx-tool` 再按事件重放任务数量和最终时间线。记录来自成功的工具结果，而不是 worker 自述。主会话 compact 后，`ctx-post-compact-hint` 会把主会话的时间线强制注入；其他 subagent 的时间线通过 `ctx show <id>` 读取。
 - **和 `yield` 的关系**：原生的完成度提醒只在纯文字结束时把 agent 打回；终结性的 `yield` 会直接结束运行，不经过它。worker 带着未完成的 todo 调用 `yield` 时，由 [task-completion-judge](#task-completion-judge) 判断是退回“没做完”还是要求先维护 todo。
 - 失败只记 warning。
 
@@ -497,6 +502,8 @@ option.blocker.delivery: steer
 
 ### Context 恢复
 
+完整模式下，`subagent-todo`、`ctx-tasklog`、`ctx-tool` 和 `ctx-post-compact-hint` 组成一条联合链路，不是四个互不相关的功能：todo 维护权威任务状态，task log 记录成功的状态变更，`ctx` 将记录重放成简短时间线，compact 后再把主会话的 `ctx list` 和 `ctx show` 结果强制注入。task log 是从 todo 派生的行事记录，不取代各会话自己的 `TodoTracker`。
+
 #### ctx-tool
 
 `ctx-tool.ts` 注册只读的 `ctx` 工具，把当前会话、subagent registry、transcript、compaction 摘要、sidecar summary 和 task log 拼成一棵上下文树。不修改会话或文件。
@@ -512,11 +519,11 @@ option.blocker.delivery: steer
 
 #### ctx-tasklog
 
-`ctx-tasklog.ts` 在每次成功的 `todo` / `goal` 修改操作后（`todo view`、`goal get` 不记），把本地时间、工具名、操作和详情追加到 local root 下的 `task-log/<agent-id>.md`，供 `ctx` 使用。详情随操作而定：`init` 记阶段和任务数，`start` / `done` / `block` 等记任务（`block` 附原因），`goal` 记目标。写失败只记 warning。
+`ctx-tasklog.ts` 在每次成功的 `todo` / `goal` 修改操作后，把本地时间、工具名、操作和详情追加到 local root 下的 `task-log/<agent-id>.md`，供 `ctx` 重放。`todo view` 和 `goal get` 不改变状态，因此不记；失败的工具调用也不记。详情随操作而定：`init` 记阶段和任务数，`start` / `done` / `block` 等记任务（`block` 附原因），`goal` 记目标。这使行事记录绑定到实际成功的状态变更，而不是模型声称做过什么。写失败只记 warning。
 
 #### ctx-post-compact-hint
 
-`ctx-post-compact-hint.ts` 在主会话 compact 后，以 steer 消息注入一个 `<post-compact-ctx>` 块：`## List` 等同 `ctx list`，`## Current session` 等同对主会话的 `ctx show`，两者来自同一份快照。subagent 的详情仍需自己 `ctx show`。
+`ctx-post-compact-hint.ts` 在主会话 compact 后，强制以 steer 消息注入一个 `<post-compact-ctx>` 块：`## List` 等同 `ctx list`，`## Current session` 等同对主会话的 `ctx show`，两者来自同一份快照；后者包含由 todo task log 重放的简短任务时间线。subagent 的详情仍需自己 `ctx show <id>`。
 
 - 监听 `session_compact`，以及没有中止、没有跳过、有结果的 `auto_compaction_end`。
 - 5 秒内只尝试注入一次。
