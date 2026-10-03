@@ -18,6 +18,7 @@ Oh My Pi（OMP）配置中可以审查、可以迁移的部分，为重型编程
 |`agent/config.yml`|OMP 配置、UI 行为、subagent 模型绑定|`~/.omp/agent/`|
 |`agent/settings.json`|扩展加载路径|`~/.omp/agent/`|
 |`agent/APPEND_SYSTEM.md`|完整模式的追加系统提示词|`~/.omp/agent/`|
+|`agent/APPEND_SYSTEM_MODEL.md`|[append-system-model](#append-system-model) 按模型追加的系统提示词；本机建了才有|`~/.omp/agent/`|
 |`agent/config-light.yml`、`agent/APPEND_SYSTEM_LIGHT.md`、`agent/omp-light.ts`|轻量模式的配置覆盖、追加提示词（目前为空）、入口源码|`~/.omp/agent/`|
 |`agent/thinking-translator.json`|`omp-thinking-translator` 插件配置|`~/.omp/agent/`|
 |`agent/PROMPT-INJECT-*.md`|[user-prompt-inject](#user-prompt-inject) 的模板：把用户原话注入 mentor 和 discussant|`~/.omp/agent/`|
@@ -124,7 +125,7 @@ flowchart LR
 |项目|处理方式|
 |---|---|
 |`config.yml`、`settings.json`、`thinking-translator.json`、`extensions/lang-nag.json`、`extensions/input-polish.json`|按字段合并|
-|`APPEND_SYSTEM.md`、`PROMPT-INJECT-*.md`|直接覆盖；本机多出来的模板不删|
+|`APPEND_SYSTEM.md`、`APPEND_SYSTEM_MODEL.md`、`PROMPT-INJECT-*.md`|直接覆盖；仓库没有的 `APPEND_SYSTEM_MODEL.md`、本机多出来的模板都不删|
 |`agents/`|`diff -rq` 确认范围后覆盖；和 `config.yml` 里的模型绑定一起更新，避免 agent 名和模型对不上|
 |`extensions/*.ts`|同名覆盖、缺的补齐；本机多出来的扩展不删|
 |轻量模式三项资产|复制到 `~/.omp/agent`，并安装入口，见[轻量模式](#轻量模式)|
@@ -139,7 +140,7 @@ flowchart LR
 
 只读本机，不写 `~/.omp`、`~/.pi`、`omp` 安装目录、PATH 或 shell 配置，本机文件的 mtime 前后不变。
 
-- **范围**：`config.yml`、`settings.json`、`APPEND_SYSTEM.md`、`thinking-translator.json`、`PROMPT-INJECT-*.md`、轻量模式三项资产、`agents/`、`extensions/*.ts`、`extensions/lang-nag.json`、`extensions/input-polish.json`，以及 `~/.pi/agent/pi-bansos-relay-state.json`。
+- **范围**：`config.yml`、`settings.json`、`APPEND_SYSTEM.md`、`APPEND_SYSTEM_MODEL.md`、`thinking-translator.json`、`PROMPT-INJECT-*.md`、轻量模式三项资产、`agents/`、`extensions/*.ts`、`extensions/lang-nag.json`、`extensions/input-polish.json`，以及 `~/.pi/agent/pi-bansos-relay-state.json`。
 - **不收回**：安装到 `omp` 旁边的 `omp-light` / `omp-light.cmd`（轻量模式三项只从 `~/.omp/agent` 取）；`extensions/doc-polish.json`。
 - 本机没有 `pi-bansos-relay-state.json`（从没用 `/bansos` 改过设置）时，不算“本机已删除”，仓库保持原样。
 - `~/.omp/plugins/package.json` 的依赖和 `install-plugins.sh` 不一致时，重写脚本里的插件列表：URL/Git 依赖原样保留，npm 依赖去掉版本号。
@@ -179,6 +180,7 @@ cp agent/config.yml agent/settings.json agent/APPEND_SYSTEM.md \
   agent/config-light.yml agent/APPEND_SYSTEM_LIGHT.md agent/omp-light.ts \
   "$HOME/.omp/agent/"
 cp -a agent/agents agent/extensions "$HOME/.omp/agent/"
+[ -f agent/APPEND_SYSTEM_MODEL.md ] && cp agent/APPEND_SYSTEM_MODEL.md "$HOME/.omp/agent/"
 mkdir -p "$HOME/.pi/agent"
 cp pi/agent/pi-bansos-relay-state.json "$HOME/.pi/agent/"
 ./install-plugins.sh
@@ -216,7 +218,7 @@ git status --short
 
 - 用 `APPEND_SYSTEM_LIGHT.md` 代替完整的追加提示词。
 - 按 `config-light.yml` 禁用 12 个行为扩展：`ctx-post-compact-hint`、`ctx-tasklog`、`ctx-tool`、`doc-polish`、`fork-task`、`isolation-nudge`、`lang-nag`、`task-completion-judge`、`task-split-check`、`tool-policy-nag`、`user-prompt-inject`、`watchdog-agent`。
-- 其余 9 个扩展照常加载：`bro`、`input-polish`、`repo-rules`、`subagent-todo`，以及五个兼容性修复（`commandcode-model-spec`、`commandcode-usage`、`unified-exec-bun-pty`、`v2-compaction-timeout`、`xai-oauth-cost-ticks`）。
+- 其余 10 个扩展照常加载：`append-system-model`、`bro`、`input-polish`、`repo-rules`、`subagent-todo`，以及五个兼容性修复（`commandcode-model-spec`、`commandcode-usage`、`unified-exec-bun-pty`、`v2-compaction-timeout`、`xai-oauth-cost-ticks`）。`APPEND_SYSTEM_MODEL.md` 因此在轻量模式下照样注入。
 - 插件、工具、rules、skills、上下文文件，以及 model、thinking、profile、auth、session 设置都不变。
 - `omp-light` 后面的参数原样传给 `omp`，可以覆盖入口预设的同名参数。
 
@@ -301,6 +303,7 @@ harness 会把 `APPEND_SYSTEM.md` 和每个 agent 的 `description` 都注入主
 |[user-prompt-inject](#user-prompt-inject)|按模板把用户原话注入指定的 subagent|否|
 |[lang-nag](#lang-nag)|回复语言不对时，在下一条输入前加提醒|否|
 |[repo-rules](#repo-rules)|补读 `.claude/rules` 等 repo 级 rule 目录|是|
+|[append-system-model](#append-system-model)|按模型 / 提供商正则追加系统提示词|是|
 |[fork-task](#fork-task)|注册 `fork_task`：带着当前对话副本派 subagent|否|
 |[isolation-nudge](#isolation-nudge)|多个写入者共用目录时拦一次|否|
 |[task-split-check](#task-split-check)|拦下多主题派发和限制汇报长度的派发|否|
@@ -475,6 +478,34 @@ option.blocker.delivery: steer
 - **注入还是列目录**：没有 frontmatter，或 `alwaysApply: true` 的，注入正文；其余有 frontmatter 的，只列出名字、`description` 和路径，供需要时 `read`。
 - **同名**：按去掉扩展名的文件名判断，离 cwd 近的优先；同一层按 `.claude`、`.agents`、`.pi` 的顺序。
 - **注入位置**：每次 `before_agent_start` 追加一个 `<repo-level-rules>` 块。正文按空白归一后，已经整段出现在现有 system prompt 里的跳过，所以原生已加载的规则、用户级规则的同一份拷贝不会重复注入。用户级 rule 交给宿主处理。
+
+#### append-system-model
+
+`append-system-model.ts` 让追加提示词能按模型区分。OMP 的 `APPEND_SYSTEM.md`、`SYSTEM.md`、`SYSTEM_TEMPLATE.md` 和 rulebook 都不能按会话模型或提供商生效，只针对某个模型的纠正会推给所有模型。
+
+**文件**：agent 目录（默认 `~/.omp/agent`，随 profile 变化）下的 `APPEND_SYSTEM_MODEL.md`，一个文件写多块。每块先是 `---` 包起来的 YAML 头，后面是正文，正文到下一个 `---` 行为止：
+
+```md
+---
+model: opus
+provider: ^anthropic$
+---
+只追加给 Anthropic 提供的 Opus。
+---
+model: "(gpt-5|o3)"
+---
+追加给任何提供商的 GPT-5 和 o3。
+```
+
+|字段|说明|
+|---|---|
+|`model`|JavaScript 正则，匹配模型 id（如 `claude-opus-5-5`）|
+|`provider`|JavaScript 正则，匹配提供商 id（如 `anthropic`）|
+
+- **匹配**：每块至少写一个字段；写了的字段都匹配才生效。正则不自动锚定，需要时自己写 `^` / `$`；YAML 会误读的写法（以 `(`、`*`、`[` 等开头）加引号。
+- **注入**：所有生效的块按文件顺序拼成一个额外的 system prompt 块，加在末尾。正文里不能有单独一行 `---`，它总会开启新的头；分隔线用 `***`。
+- **时机**：每次 `before_agent_start`，主会话和每个 subagent 都按各自的模型匹配。每条 prompt 重新读文件，所以改文件、`/model` 切换都从下一条 prompt 生效，不用重启。一轮内 auto-retry 换了模型时，沿用这一轮开始时选中的块。
+- **失败**：读不了文件或格式错误（未知字段、正则无效、正文为空、`---` 没闭合等）时不注入，按行号记 warning，同一错误只记一次；不阻塞 prompt。
 
 ### 派发与交付
 

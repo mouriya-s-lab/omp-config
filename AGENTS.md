@@ -8,7 +8,8 @@
 light system prompts, light-mode config and launcher source, custom subagent
 definitions, local TypeScript extensions, the agent-root
 `thinking-translator.json` for `omp-thinking-translator`, the agent-root
-`PROMPT-INJECT-*.md` templates for `user-prompt-inject.ts`, the `pi-bansos`
+`PROMPT-INJECT-*.md` templates for `user-prompt-inject.ts`, the agent-root
+`APPEND_SYSTEM_MODEL.md` for `append-system-model.ts` (when the machine has one), the `pi-bansos`
 plugin state (`pi/agent/pi-bansos-relay-state.json`), the plugin install
 list, and the maintenance commands that move state between this repo and a
 machine's live `~/.omp/agent` (plus `~/.pi/agent` for the `pi-bansos` state)
@@ -27,6 +28,7 @@ flowchart LR
     A["agent/config.yml"]
     S["agent/settings.json"]
     P["agent/APPEND_SYSTEM.md"]
+    PM["agent/APPEND_SYSTEM_MODEL.md"]
     L1["agent/config-light.yml"]
     L2["agent/APPEND_SYSTEM_LIGHT.md"]
     L3["agent/omp-light.ts"]
@@ -39,6 +41,7 @@ flowchart LR
   end
   subgraph machine["~/.omp/agent"]
     LA["config.yml / settings.json"]
+    LM["APPEND_SYSTEM_MODEL.md"]
     LT["thinking-translator.json"]
     LQ["PROMPT-INJECT-*.md"]
     LG["agents/"]
@@ -70,7 +73,7 @@ flowchart LR
   or subscribes to lifecycle events on the `ExtensionAPI` (`pi`).
 - **Two one-way syncs, never one "sync".** `/sync-omp-config` never writes the
   machine; its sync range includes the three light assets, the agent-root
-  `thinking-translator.json` and `PROMPT-INJECT-*.md` templates, and
+  `thinking-translator.json`, `APPEND_SYSTEM_MODEL.md`, and `PROMPT-INJECT-*.md` templates, and
   `~/.pi/agent/pi-bansos-relay-state.json`, but excludes installed PATH launchers.
   `/update-omp` writes the machine and installs `omp-light` beside the resolved
   `omp` executable (`.omp/commands/*.md`).
@@ -93,10 +96,11 @@ flowchart LR
 | Path | Purpose |
 | --- | --- |
 | `agent/` | Managed harness config. Only listed items are portable; the whole dir is **not**. |
-| `agent/extensions/` | Local TypeScript extensions (the code core). 21 `.ts` (incl. `bro.ts`, the built-in-AI rewrite of the former `pi-bro` plugin, `input-polish.ts`, which polishes the input-box draft on the configured chord (default Ctrl+Enter) and shows the result in an overlay over the input box, where Enter sends it and Esc discards it, `watchdog-agent.ts`, `user-prompt-inject.ts`, which renders the root session's user prompts into `PROMPT-INJECT-*.md` templates and prepends them, request-only, to every model call of the targeted subagents (mentor and discussants by default), `fork-task.ts`, which seeds native `task` children with a copy of the caller's conversation, `task-split-check.ts`, which blocks main-agent `task` calls whose items cover more than one topic, and any `task`/`fork_task` call that caps a `task:*` worker's report length, `subagent-todo.ts`, which gives each `task:*` worker its own native `todo` tool that OMP strips from subagents, and `task-completion-judge.ts`, which bounces a `task:low`/`task:mid`/`task:free` worker's first final `yield` once when a model judges the slice unfinished, and once more when it is finished but the worker's todo list still has open items) + `doc-polish.json`/`input-polish.json`/`lang-nag.json` sidecars (`input-polish.json` and `lang-nag.json` are synced both ways; `doc-polish.json` is machine-local/prompt-overridable — see Important Files). |
+| `agent/extensions/` | Local TypeScript extensions (the code core). 22 `.ts` (incl. `bro.ts`, the built-in-AI rewrite of the former `pi-bro` plugin, `input-polish.ts`, which polishes the input-box draft on the configured chord (default Ctrl+Enter) and shows the result in an overlay over the input box, where Enter sends it and Esc discards it, `watchdog-agent.ts`, `user-prompt-inject.ts`, which renders the root session's user prompts into `PROMPT-INJECT-*.md` templates and prepends them, request-only, to every model call of the targeted subagents (mentor and discussants by default), `append-system-model.ts`, which appends the `APPEND_SYSTEM_MODEL.md` blocks whose `model`/`provider` regexes match the session's model to the system prompt on every `before_agent_start`, `fork-task.ts`, which seeds native `task` children with a copy of the caller's conversation, `task-split-check.ts`, which blocks main-agent `task` calls whose items cover more than one topic, and any `task`/`fork_task` call that caps a `task:*` worker's report length, `subagent-todo.ts`, which gives each `task:*` worker its own native `todo` tool that OMP strips from subagents, and `task-completion-judge.ts`, which bounces a `task:low`/`task:mid`/`task:free` worker's first final `yield` once when a model judges the slice unfinished, and once more when it is finished but the worker's todo list still has open items) + `doc-polish.json`/`input-polish.json`/`lang-nag.json` sidecars (`input-polish.json` and `lang-nag.json` are synced both ways; `doc-polish.json` is machine-local/prompt-overridable — see Important Files). |
 | `agent/agents/` | Custom subagent definitions (`*.md`) + `README.txt` authoring pitfalls. |
 | `agent/thinking-translator.json` | Agent-root translator config for `omp-thinking-translator`. Portable regular item: `/sync-omp-config` carries machine → repo, `/update-omp` carries repo → machine. |
 | `agent/PROMPT-INJECT-*.md` | Agent-root templates for `user-prompt-inject.ts` (frontmatter `target`/`name`/`enabled`, body with `{{user_prompt[i]}}` / `{{user_prompt[a:e]}}`). Portable regular files in both directions, copied whole; `/update-omp` does not delete extra live templates. |
+| `agent/APPEND_SYSTEM_MODEL.md` | Agent-root per-model system-prompt appendix for `append-system-model.ts` (`---`-fenced YAML headers with `model`/`provider` regexes, each followed by its body). Portable regular file in both directions, copied whole; exists only once the user creates it, and `/update-omp` leaves the live copy alone when the repo has none. Read per prompt, so edits apply without restart. |
 | `pi/agent/pi-bansos-relay-state.json` | `pi-bansos` plugin state (relay on/off, relay URL, saved relays, `statusBar`), read by the plugin from `~/.pi/agent/`, not `~/.omp/agent`. Written by the plugin's `/bansos` command; no credentials. Portable regular item in both directions. |
 | `.omp/commands/` | Project-level slash-command definitions run from repo root. |
 | repo root | `install-plugins.sh`, `plugin-audit.sh`, `README.md` (authoritative, in Chinese). |
@@ -233,7 +237,7 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
   never receive it, so rules they need are repeated in the `task:*` definitions.
 - `agent/config-light.yml` — declarative light-mode config overlay: disables twelve
   optional behavior extensions (including `task-completion-judge` and
-  `user-prompt-inject`); the other nine (`bro`, `input-polish`, `repo-rules`,
+  `user-prompt-inject`); the other ten (`append-system-model`, `bro`, `input-polish`, `repo-rules`,
   `subagent-todo`, and five compatibility fixes) stay loaded, as listed in `README.md`.
 - `agent/APPEND_SYSTEM_LIGHT.md` — system-prompt appendix used only by
   `omp-light` (currently empty); the normal `APPEND_SYSTEM.md` remains the full-mode prompt.
@@ -285,6 +289,7 @@ cp agent/config.yml agent/settings.json agent/APPEND_SYSTEM.md \
   agent/config-light.yml agent/APPEND_SYSTEM_LIGHT.md agent/omp-light.ts \
   "$HOME/.omp/agent/"
 cp -a agent/agents agent/extensions "$HOME/.omp/agent/"
+[ -f agent/APPEND_SYSTEM_MODEL.md ] && cp agent/APPEND_SYSTEM_MODEL.md "$HOME/.omp/agent/"
 mkdir -p "$HOME/.pi/agent"
 cp pi/agent/pi-bansos-relay-state.json "$HOME/.pi/agent/"
 ```

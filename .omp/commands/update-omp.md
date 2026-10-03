@@ -17,6 +17,7 @@ description: 用本仓库快照更新本机 OMP 配置和 pi-bansos 状态（rep
 | `agent/config.yml` | 同名 | 只改有差异的字段；`/sync-omp-config` 列出的本机字段不动 |
 | `agent/settings.json` | 同名 | 只改有差异的字段 |
 | `agent/APPEND_SYSTEM.md` | 同名 | 直接覆盖 |
+| `agent/APPEND_SYSTEM_MODEL.md` | 同名 | 直接覆盖；仓库没有时不动本机 |
 | `agent/PROMPT-INJECT-*.md` | 同名 | 直接覆盖；本机多出来的模板不删 |
 | `agent/thinking-translator.json` | 同名 | 只改有差异的字段 |
 | `agent/agents/` | `agents/` | `diff -rq` 确认范围后覆盖 |
@@ -63,4 +64,4 @@ agent 定义和 `config.yml` 里的模型绑定必须一起更新；只更新一
 - 复制的文件与仓库 `cmp` 一致；编辑过的结构化配置，除本机字段外与仓库逐字段一致；安装入口检查内容、权限和解析路径。
 - 动过的 YAML/JSON 两端都要能解析：`config.yml`、`config-light.yml` 用 `Bun.YAML.parse`，`settings.json`、`thinking-translator.json`、`lang-nag.json`、`input-polish.json`、`pi-bansos-relay-state.json` 用 `JSON.parse`。
 - 不打印凭据，不把明文凭据写进本机。
-- 报告改了哪些文件、装卸了哪些插件、哪些项因等待确认被跳过，并提醒重启 OMP：APPEND_SYSTEM、扩展、插件在下次启动时加载；`PROMPT-INJECT-*.md` 从下一个派出的 subagent 开始生效；`pi-bansos-relay-state.json` 在已运行的会话里要到下次会话启动或下一次 `/bansos` 改动时才生效。
+- 报告改了哪些文件、装卸了哪些插件、哪些项因等待确认被跳过，并提醒重启 OMP：APPEND_SYSTEM、扩展、插件在下次启动时加载；`APPEND_SYSTEM_MODEL.md` 从下一条 prompt 开始生效；`PROMPT-INJECT-*.md` 从下一个派出的 subagent 开始生效；`pi-bansos-relay-state.json` 在已运行的会话里要到下次会话启动或下一次 `/bansos` 改动时才生效。
