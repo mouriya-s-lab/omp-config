@@ -20,6 +20,7 @@ Oh My Pi（OMP）配置中可以审查、可以迁移的部分，为重型编程
 |`agent/APPEND_SYSTEM.md`|完整模式的追加系统提示词|`~/.omp/agent/`|
 |`agent/config-light.yml`、`agent/APPEND_SYSTEM_LIGHT.md`、`agent/omp-light.ts`|轻量模式的配置覆盖、追加提示词（目前为空）、入口源码|`~/.omp/agent/`|
 |`agent/thinking-translator.json`|`omp-thinking-translator` 插件配置|`~/.omp/agent/`|
+|`agent/PROMPT-INJECT-*.md`|[user-prompt-inject](#user-prompt-inject) 的模板：把用户原话注入 mentor 和 discussant|`~/.omp/agent/`|
 |`agent/agents/`|subagent 定义；`README.txt` 记录编写陷阱|`~/.omp/agent/agents/`|
 |`agent/extensions/`|本地扩展，以及 `lang-nag.json`、`input-polish.json`、`doc-polish.json` 三个扩展配置|`~/.omp/agent/extensions/`|
 |`pi/agent/pi-bansos-relay-state.json`|`pi-bansos` 插件状态|`~/.pi/agent/`|
@@ -59,6 +60,8 @@ Oh My Pi（OMP）配置中可以审查、可以迁移的部分，为重型编程
 **把非法工具调用当作整体偏离的信号。** [tool-policy-nag](#tool-policy-nag) 检测模型是否绕开内置工具，只计数和提醒，不拦截命令。目标不是追求形式上完美的“古典”工具调用，而是在偏离扩散到其他规则之前及时校正。
 
 **用 watchdog 做独立的运行时审阅。** watchdog 作为第三方观察者自动读取 context，并按规则注入提醒；作用类似 Claude 的 `/advisor`，但目标、触发和投放方式更广。判定选项较少时，同一个 watchdog 可以改用 Jev 后端（[watchdog-agent](#watchdog-agent)）。
+
+**让顾问看到用户原话。** mentor 和 discussant 只知道派它的 agent 告诉它的东西，只能顺着对方的转述给意见，成了回声放大器。[user-prompt-inject](#user-prompt-inject) 把根会话里用户自己写的 prompt 按模板注入它们的每次模型调用，让它们拿用户的目标和约束去核对对方的计划，而不是核对对方的转述。
 
 **单独补偿语言设置丢失。** Claude 的 server compact 之后，重新注入的 system prompt 可能没有恢复语言约束。[lang-nag](#lang-nag) 因此独立检查回复语言，并在下一次输入前补充提醒；它不改写已经发出的回复。
 
@@ -121,7 +124,7 @@ flowchart LR
 |项目|处理方式|
 |---|---|
 |`config.yml`、`settings.json`、`thinking-translator.json`、`extensions/lang-nag.json`、`extensions/input-polish.json`|按字段合并|
-|`APPEND_SYSTEM.md`|直接覆盖|
+|`APPEND_SYSTEM.md`、`PROMPT-INJECT-*.md`|直接覆盖；本机多出来的模板不删|
 |`agents/`|`diff -rq` 确认范围后覆盖；和 `config.yml` 里的模型绑定一起更新，避免 agent 名和模型对不上|
 |`extensions/*.ts`|同名覆盖、缺的补齐；本机多出来的扩展不删|
 |轻量模式三项资产|复制到 `~/.omp/agent`，并安装入口，见[轻量模式](#轻量模式)|
@@ -136,7 +139,7 @@ flowchart LR
 
 只读本机，不写 `~/.omp`、`~/.pi`、`omp` 安装目录、PATH 或 shell 配置，本机文件的 mtime 前后不变。
 
-- **范围**：`config.yml`、`settings.json`、`APPEND_SYSTEM.md`、`thinking-translator.json`、轻量模式三项资产、`agents/`、`extensions/*.ts`、`extensions/lang-nag.json`、`extensions/input-polish.json`，以及 `~/.pi/agent/pi-bansos-relay-state.json`。
+- **范围**：`config.yml`、`settings.json`、`APPEND_SYSTEM.md`、`thinking-translator.json`、`PROMPT-INJECT-*.md`、轻量模式三项资产、`agents/`、`extensions/*.ts`、`extensions/lang-nag.json`、`extensions/input-polish.json`，以及 `~/.pi/agent/pi-bansos-relay-state.json`。
 - **不收回**：安装到 `omp` 旁边的 `omp-light` / `omp-light.cmd`（轻量模式三项只从 `~/.omp/agent` 取）；`extensions/doc-polish.json`。
 - 本机没有 `pi-bansos-relay-state.json`（从没用 `/bansos` 改过设置）时，不算“本机已删除”，仓库保持原样。
 - `~/.omp/plugins/package.json` 的依赖和 `install-plugins.sh` 不一致时，重写脚本里的插件列表：URL/Git 依赖原样保留，npm 依赖去掉版本号。
@@ -172,7 +175,7 @@ GitHub URL 的插件名按 URL 最后一段推断，仓库名和包名不同时�
 ```bash
 mkdir -p "$HOME/.omp/agent"
 cp agent/config.yml agent/settings.json agent/APPEND_SYSTEM.md \
-  agent/thinking-translator.json \
+  agent/thinking-translator.json agent/PROMPT-INJECT-*.md \
   agent/config-light.yml agent/APPEND_SYSTEM_LIGHT.md agent/omp-light.ts \
   "$HOME/.omp/agent/"
 cp -a agent/agents agent/extensions "$HOME/.omp/agent/"
@@ -212,7 +215,7 @@ git status --short
 `omp-light` 启动一个精简的 OMP 进程，适合简单小任务：
 
 - 用 `APPEND_SYSTEM_LIGHT.md` 代替完整的追加提示词。
-- 按 `config-light.yml` 禁用 11 个行为扩展：`ctx-post-compact-hint`、`ctx-tasklog`、`ctx-tool`、`doc-polish`、`fork-task`、`isolation-nudge`、`lang-nag`、`task-completion-judge`、`task-split-check`、`tool-policy-nag`、`watchdog-agent`。
+- 按 `config-light.yml` 禁用 12 个行为扩展：`ctx-post-compact-hint`、`ctx-tasklog`、`ctx-tool`、`doc-polish`、`fork-task`、`isolation-nudge`、`lang-nag`、`task-completion-judge`、`task-split-check`、`tool-policy-nag`、`user-prompt-inject`、`watchdog-agent`。
 - 其余 9 个扩展照常加载：`bro`、`input-polish`、`repo-rules`、`subagent-todo`，以及五个兼容性修复（`commandcode-model-spec`、`commandcode-usage`、`unified-exec-bun-pty`、`v2-compaction-timeout`、`xai-oauth-cost-ticks`）。
 - 插件、工具、rules、skills、上下文文件，以及 model、thinking、profile、auth、session 设置都不变。
 - `omp-light` 后面的参数原样传给 `omp`，可以覆盖入口预设的同名参数。
@@ -236,6 +239,7 @@ subagent 分三类：`task:*` 执行，`discuss:*` 只读讨论，`mentor:defaul
 |---|---|
 |编排流程、各类 agent 如何配合|`agent/APPEND_SYSTEM.md`|
 |某个 agent 的职责（`description`）和它自己的角色提示（正文）|`agent/agents/<name>.md`|
+|注入给某些 agent 的用户原话模板|`agent/PROMPT-INJECT-*.md`，见 [user-prompt-inject](#user-prompt-inject)|
 |模型、推理强度、运行开关、禁用入口|`agent/config.yml`|
 
 harness 会把 `APPEND_SYSTEM.md` 和每个 agent 的 `description` 都注入主 agent，所以两处不写重复内容。subagent 收不到 `APPEND_SYSTEM.md`，它需要的规则写在自己的定义里。
@@ -294,6 +298,7 @@ harness 会把 `APPEND_SYSTEM.md` 和每个 agent 的 `description` 都注入主
 |---|---|---|
 |[tool-policy-nag](#tool-policy-nag)|发现用 shell/eval 代替内置工具时计数并提醒|否|
 |[watchdog-agent](#watchdog-agent)|按目标投放的第三方审查者|否|
+|[user-prompt-inject](#user-prompt-inject)|按模板把用户原话注入指定的 subagent|否|
 |[lang-nag](#lang-nag)|回复语言不对时，在下一条输入前加提醒|否|
 |[repo-rules](#repo-rules)|补读 `.claude/rules` 等 repo 级 rule 目录|是|
 |[fork-task](#fork-task)|注册 `fork_task`：带着当前对话副本派 subagent|否|
@@ -411,6 +416,48 @@ option.blocker.delivery: steer
 |`/watchdog on\|off <name> global`|改写该文件 frontmatter 里的 `enabled` 行（没有就加一行），对之后所有会话生效，并清除本会话对它的覆盖|
 
 本会话覆盖优先于文件里的 `enabled`。关闭时正在进行的判定结果会被丢弃；重新开启时计数、游标和封顶从零开始。多个文件同名时命令报错并列出路径，需要给它们设不同的 `name`。
+
+#### user-prompt-inject
+
+`user-prompt-inject.ts` 把根会话里用户自己写的 prompt 填进 `PROMPT-INJECT-<标签>.md` 模板，注入指定 subagent 的每一次模型调用。用途是让 mentor 和 discussant 拿用户原话核对派它的 agent，而不是只听对方转述。OMP 没有现成办法：`before_subagent_spawn` 只能换模型或拦截；`before_agent_start` 在 idle 或 parked 的 subagent 被 `write agent://<id>` 唤醒时不触发，续聊收不到新的用户输入。
+
+**文件位置**与 [watchdog-agent](#watchdog-agent) 相同：agent 目录下的 `PROMPT-INJECT-*.md`，或从 cwd 往上到 git root 每一层的 `<dir>/PROMPT-INJECT-*.md`、`<dir>/.omp/PROMPT-INJECT-*.md`，文件名不区分大小写。每个文件独立生效，同一个 subagent 可以匹配多个。
+
+**frontmatter 字段：**
+
+|字段|说明|
+|---|---|
+|`target`（必填）|agent 名（如 `mentor:default`），逗号分隔可写多个；`*` 表示所有 subagent。主会话不注入|
+|`name`|注入块的名字，缺省取文件名里的标签|
+|`enabled`|默认 `true`；写成其他值就不加载|
+
+**占位符。** 正文是模板。`user_prompt` 是用户 prompt 的数组，按时间顺序，0 是第一条：
+
+|写法|结果|
+|---|---|
+|`{{user_prompt[0]}}`|第一条|
+|`{{user_prompt[-1]}}`|最新一条；`-3` 是从最新往前数第三条|
+|`{{user_prompt[3:e]}}`|切片，`e` 表示结尾；不含右端点，与数组切片相同，两端都可以写负数|
+
+- 单条越界时为空；切片两端夹到 `[0, 长度]`，起点不小于终点时为空。
+- 单条原样插入文字；切片的每一项写成 `<user_prompt index="N">…</user_prompt>`，`N` 是从 0 开始的位置。
+- 其他 `{{user_prompt…}}` 写法（如 `{{user_prompt}}`、`{{user_prompt[:3]}}`）让整个文件跳过并记 warning。用户 prompt 里出现的占位符原样保留，不再展开。
+
+仓库的 `agent/PROMPT-INJECT-user-goal.md` 投给 `mentor:default`、`discuss:steady`、`discuss:divergent`，用 `{{user_prompt[0:e]}}` 注入全部用户 prompt，并要求它们以用户原话为准，指出对方计划偏离的地方。
+
+**用户 prompt 的来源。** 从本 subagent 沿 `ctx.agent.parentId` 在进程的 agent registry 里往上找到主会话（`task:high` 派出的孙代也一样），读它当前分支（`getBranch()`，compact 之前的消息也在）上 `role: "user"`、`attribution: "user"`、非 `synthetic` 的消息文字，按顺序排列。
+
+- 输入经过 `input` 钩子和命令展开后才存进会话，所以取到的是提交给模型的文字；例如 [lang-nag](#lang-nag) 加在前面的 `instruction` 也在里面。
+- `attribution` 由发送方决定，扩展用 `sendUserMessage` 不写它时默认是 `user`。本仓库扩展注入的消息因此都标为 `agent`：`watchdog-agent`、`tool-policy-nag`、`ctx-post-compact-hint`、`doc-polish` 的结果回传。新增会注入用户消息的扩展时也要这样写，否则它的消息会被当成用户原话。插件注入的消息不受本仓库控制。
+- 技能调用（`/skill:…`）存成 custom 消息，不算进 `user_prompt`。
+
+**运行方式：**
+
+- 模板在会话开始时读取，改动从下一个派出的 subagent 开始生效。
+- 每次 `context` 事件（每次模型调用，包括 IRC 唤醒、parked 后的恢复）重新读根会话，在消息最前面加一条只用于本次请求的 developer 消息，里面是所有匹配模板渲染出的 `<user-prompt-inject name=…>…</user-prompt-inject>`。这条消息不写进会话，也就不会在后续调用里重复。
+- 用户 prompt 变了，这条消息就变，subagent 对话的 prompt cache 从这条消息起失效。
+- **失败**：文件格式错误时跳过并记 warning；找不到主会话或主会话已释放时不注入，同一原因只记一次 warning。都不阻塞模型调用。
+- 依赖 OMP 内部实现（`AgentRegistry`、`ctx.agent`、`context` 事件的调用时机），升级 OMP 后要在真实 TUI 里重新验证首次派发和续聊。
 
 #### lang-nag
 
@@ -660,5 +707,6 @@ rm -f "$pty_root/build-failure.txt"
 
 - **没有测试和 CI。** 扩展改动的唯一证明是运行时验证：用 `/update-omp` 应用，重启 OMP，实际触发对应的工具、命令或钩子，看输出和副作用。
 - **扩展建的辅助会话必须传 `taskDepth: 1`。** 目前有六处：`bro`、`doc-polish`、`input-polish`、`lang-nag`、`watchdog-agent` 的聊天 reviewer、`fork-task` 的 shake。不传的话 SDK 把它当主会话，`dispose()` 时会销毁全局 `AgentLifecycleManager`，所有空闲 subagent 变成 `Unknown agent`，无法再续聊。`lang-nag` 几乎每轮都建辅助会话，漏传会让 subagent 很快失联。只调用 `completeSimple` 的扩展（`task-split-check`、`task-completion-judge`）不建会话，不涉及这条。
-- **升级 OMP 后**，在真实 TUI 里重新验证 [fork-task](#fork-task) 和 [subagent-todo](#subagent-todo)，它们依赖 OMP 内部实现（`AgentRegistry`、子会话文件路径、钩子顺序、宿主工具注入、`TodoTool` 读写的会话接口）。
+- **升级 OMP 后**，在真实 TUI 里重新验证 [fork-task](#fork-task)、[subagent-todo](#subagent-todo) 和 [user-prompt-inject](#user-prompt-inject)，它们依赖 OMP 内部实现（`AgentRegistry`、`ctx.agent`、子会话文件路径、钩子顺序、`context` 事件的调用时机、宿主工具注入、`TodoTool` 读写的会话接口）。
+- **扩展注入用户消息时写 `attribution: "agent"`。** 不写就默认 `user`，[user-prompt-inject](#user-prompt-inject) 会把它当成用户原话注入 mentor 和 discussant。
 - **改 agent 定义前**读 `agent/agents/README.txt`；目录里的笔记用 `.txt`，不要用 `.md`。

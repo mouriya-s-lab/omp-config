@@ -111,7 +111,7 @@ export default function ctxPostCompactHint(pi: ExtensionAPI): void {
                     showText: show?.text,
                     showId: show?.id,
                 }),
-                { deliverAs: 'steer' },
+                { deliverAs: 'steer', attribution: 'agent' },
             );
         } catch (error) {
             pi.logger.warn('Post-compaction ctx injection failed', {

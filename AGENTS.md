@@ -7,7 +7,8 @@
 (`README.md:1-3`). It holds only reviewable inputs: harness config, full and
 light system prompts, light-mode config and launcher source, custom subagent
 definitions, local TypeScript extensions, the agent-root
-`thinking-translator.json` for `omp-thinking-translator`, the `pi-bansos`
+`thinking-translator.json` for `omp-thinking-translator`, the agent-root
+`PROMPT-INJECT-*.md` templates for `user-prompt-inject.ts`, the `pi-bansos`
 plugin state (`pi/agent/pi-bansos-relay-state.json`), the plugin install
 list, and the maintenance commands that move state between this repo and a
 machine's live `~/.omp/agent` (plus `~/.pi/agent` for the `pi-bansos` state)
@@ -30,6 +31,7 @@ flowchart LR
     L2["agent/APPEND_SYSTEM_LIGHT.md"]
     L3["agent/omp-light.ts"]
     T["agent/thinking-translator.json"]
+    Q["agent/PROMPT-INJECT-*.md"]
     G["agent/agents/*.md"]
     E["agent/extensions/*.ts"]
     I["install-plugins.sh"]
@@ -38,6 +40,7 @@ flowchart LR
   subgraph machine["~/.omp/agent"]
     LA["config.yml / settings.json"]
     LT["thinking-translator.json"]
+    LQ["PROMPT-INJECT-*.md"]
     LG["agents/"]
     LE["extensions/"]
     LL["config-light.yml / APPEND_SYSTEM_LIGHT.md / omp-light.ts"]
@@ -67,8 +70,8 @@ flowchart LR
   or subscribes to lifecycle events on the `ExtensionAPI` (`pi`).
 - **Two one-way syncs, never one "sync".** `/sync-omp-config` never writes the
   machine; its sync range includes the three light assets, the agent-root
-  `thinking-translator.json`, and `~/.pi/agent/pi-bansos-relay-state.json`, but
-  excludes installed PATH launchers.
+  `thinking-translator.json` and `PROMPT-INJECT-*.md` templates, and
+  `~/.pi/agent/pi-bansos-relay-state.json`, but excludes installed PATH launchers.
   `/update-omp` writes the machine and installs `omp-light` beside the resolved
   `omp` executable (`.omp/commands/*.md`).
 - **Structured configs are managed in both directions, field by field.**
@@ -90,9 +93,10 @@ flowchart LR
 | Path | Purpose |
 | --- | --- |
 | `agent/` | Managed harness config. Only listed items are portable; the whole dir is **not**. |
-| `agent/extensions/` | Local TypeScript extensions (the code core). 20 `.ts` (incl. `bro.ts`, the built-in-AI rewrite of the former `pi-bro` plugin, `input-polish.ts`, which polishes the input-box draft on the configured chord (default Ctrl+Enter) and shows the result in an overlay over the input box, where Enter sends it and Esc discards it, `watchdog-agent.ts`, `fork-task.ts`, which seeds native `task` children with a copy of the caller's conversation, `task-split-check.ts`, which blocks main-agent `task` calls whose items cover more than one topic, and any `task`/`fork_task` call that caps a `task:*` worker's report length, `subagent-todo.ts`, which gives each `task:*` worker its own native `todo` tool that OMP strips from subagents, and `task-completion-judge.ts`, which bounces a `task:low`/`task:mid`/`task:free` worker's first final `yield` once when a model judges the slice unfinished, and once more when it is finished but the worker's todo list still has open items) + `doc-polish.json`/`input-polish.json`/`lang-nag.json` sidecars (`input-polish.json` and `lang-nag.json` are synced both ways; `doc-polish.json` is machine-local/prompt-overridable — see Important Files). |
+| `agent/extensions/` | Local TypeScript extensions (the code core). 21 `.ts` (incl. `bro.ts`, the built-in-AI rewrite of the former `pi-bro` plugin, `input-polish.ts`, which polishes the input-box draft on the configured chord (default Ctrl+Enter) and shows the result in an overlay over the input box, where Enter sends it and Esc discards it, `watchdog-agent.ts`, `user-prompt-inject.ts`, which renders the root session's user prompts into `PROMPT-INJECT-*.md` templates and prepends them, request-only, to every model call of the targeted subagents (mentor and discussants by default), `fork-task.ts`, which seeds native `task` children with a copy of the caller's conversation, `task-split-check.ts`, which blocks main-agent `task` calls whose items cover more than one topic, and any `task`/`fork_task` call that caps a `task:*` worker's report length, `subagent-todo.ts`, which gives each `task:*` worker its own native `todo` tool that OMP strips from subagents, and `task-completion-judge.ts`, which bounces a `task:low`/`task:mid`/`task:free` worker's first final `yield` once when a model judges the slice unfinished, and once more when it is finished but the worker's todo list still has open items) + `doc-polish.json`/`input-polish.json`/`lang-nag.json` sidecars (`input-polish.json` and `lang-nag.json` are synced both ways; `doc-polish.json` is machine-local/prompt-overridable — see Important Files). |
 | `agent/agents/` | Custom subagent definitions (`*.md`) + `README.txt` authoring pitfalls. |
 | `agent/thinking-translator.json` | Agent-root translator config for `omp-thinking-translator`. Portable regular item: `/sync-omp-config` carries machine → repo, `/update-omp` carries repo → machine. |
+| `agent/PROMPT-INJECT-*.md` | Agent-root templates for `user-prompt-inject.ts` (frontmatter `target`/`name`/`enabled`, body with `{{user_prompt[i]}}` / `{{user_prompt[a:e]}}`). Portable regular files in both directions, copied whole; `/update-omp` does not delete extra live templates. |
 | `pi/agent/pi-bansos-relay-state.json` | `pi-bansos` plugin state (relay on/off, relay URL, saved relays, `statusBar`), read by the plugin from `~/.pi/agent/`, not `~/.omp/agent`. Written by the plugin's `/bansos` command; no credentials. Portable regular item in both directions. |
 | `.omp/commands/` | Project-level slash-command definitions run from repo root. |
 | repo root | `install-plugins.sh`, `plugin-audit.sh`, `README.md` (authoritative, in Chinese). |
@@ -151,11 +155,17 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
 - **Two idioms:** tool/command registration (`pi.registerTool`,
   `pi.registerCommand`, `pi.setLabel`) vs pure hooks (`pi.on(event, handler)`).
   Hook-only extensions register nothing (e.g. `repo-rules.ts`,
-  `tool-policy-nag.ts`, `commandcode-model-spec.ts`).
+  `tool-policy-nag.ts`, `commandcode-model-spec.ts`, `user-prompt-inject.ts`).
 - **Lifecycle events used:** `session_start`, `before_agent_start`, `input`,
-  `tool_call`, `tool_result`, `message_end`, `session_compact`,
+  `context`, `tool_call`, `tool_result`, `message_end`, `session_compact`,
   `auto_compaction_end`, `before_subagent_spawn`, `session_shutdown`,
-  `session_switch/branch/tree`.
+  `session_switch/branch/tree`. Only `context` fires on every model call,
+  including IRC wakes of idle/parked subagents; `before_agent_start` does not.
+- **Injected user-role messages carry `attribution: "agent"`:** every
+  `pi.sendUserMessage` an extension sends on its own behalf (`watchdog-agent.ts`,
+  `tool-policy-nag.ts`, `ctx-post-compact-hint.ts`, `doc-polish.ts`) passes it.
+  The default is `user`, and `user-prompt-inject.ts` treats `user`-attributed
+  messages as the human's own prompts.
 - **Imports:** type-only `ExtensionAPI`/`ExtensionContext`; runtime imports from
   `@oh-my-pi/pi-coding-agent` (`createAgentSession`, `SessionManager`, `z`,
   `getAgentDir`, ...), `@oh-my-pi/pi-natives` (`glob`/`grep`), `@oh-my-pi/pi-ai`
@@ -221,10 +231,10 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
   `task` vs `fork_task`, agent tiers, shared-checkout vs `isolated: true` rules,
   tool policy). Task children
   never receive it, so rules they need are repeated in the `task:*` definitions.
-- `agent/config-light.yml` — declarative light-mode config overlay: disables eleven
-  optional behavior extensions (including `task-completion-judge`); the other
-  nine (`bro`, `input-polish`, `repo-rules`, `subagent-todo`, and five compatibility fixes) stay
-  loaded, as listed in `README.md`.
+- `agent/config-light.yml` — declarative light-mode config overlay: disables twelve
+  optional behavior extensions (including `task-completion-judge` and
+  `user-prompt-inject`); the other nine (`bro`, `input-polish`, `repo-rules`,
+  `subagent-todo`, and five compatibility fixes) stay loaded, as listed in `README.md`.
 - `agent/APPEND_SYSTEM_LIGHT.md` — system-prompt appendix used only by
   `omp-light` (currently empty); the normal `APPEND_SYSTEM.md` remains the full-mode prompt.
 - `agent/omp-light.ts` — portable `#!/usr/bin/env bun` launcher source. `/update-omp`
@@ -235,6 +245,11 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
   `omp-thinking-translator` at `~/.omp/agent`. Managed regular item in both
   directions (field-level diff and edit; validate with `bun -e` + `JSON.parse`). Unlike
   `agent/extensions/doc-polish.json` below, it is portable, not machine-local.
+- `agent/PROMPT-INJECT-user-goal.md` — the shipped `user-prompt-inject` template:
+  targets `mentor:default`, `discuss:steady`, `discuss:divergent`, injects every
+  root user prompt (`{{user_prompt[0:e]}}`), and tells them to judge their
+  advisee against those requests rather than its restatement. Templates are read
+  at subagent session start, so edits apply on the next spawn without restart.
 - `pi/agent/pi-bansos-relay-state.json` — state file of the `pi-bansos` plugin
   (`{enabled, url, relays, statusBar}`), which the plugin reads from and writes
   to `~/.pi/agent/pi-bansos-relay-state.json` via `/bansos`. The status bar
@@ -266,7 +281,7 @@ Direct-migration copy set (never copy the whole `agent/`; `README.md`):
 ```bash
 mkdir -p "$HOME/.omp/agent"
 cp agent/config.yml agent/settings.json agent/APPEND_SYSTEM.md \
-  agent/thinking-translator.json \
+  agent/thinking-translator.json agent/PROMPT-INJECT-*.md \
   agent/config-light.yml agent/APPEND_SYSTEM_LIGHT.md agent/omp-light.ts \
   "$HOME/.omp/agent/"
 cp -a agent/agents agent/extensions "$HOME/.omp/agent/"

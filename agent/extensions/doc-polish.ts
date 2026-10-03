@@ -833,10 +833,10 @@ export default function docPolish(pi: ExtensionAPI): void {
 				// Human invocation differs from an LLM tool call: deliver the result to the
 				// current session's main agent as fresh input (it decides how to use the
 				// reference), rather than displaying it to the human.
-				void pi.sendUserMessage(buildAgentResultText(results));
+				void pi.sendUserMessage(buildAgentResultText(results), { attribution: "agent" });
 			} catch (err) {
 				if (err instanceof DocPolishConfigError) {
-					void pi.sendUserMessage(err.message);
+					void pi.sendUserMessage(err.message, { attribution: "agent" });
 				} else if (err instanceof DocPolishRuntimeError) {
 					ctx.ui.notify(err.message, "error");
 				} else {

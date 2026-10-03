@@ -1096,7 +1096,7 @@ export default function toolPolicyNag(pi: ExtensionAPI): void {
                 ? { kind: 'watching', hits, nagsSent }
                 : { kind: 'exhausted', hits, nagsSent },
         );
-        pi.sendUserMessage(NAG_TEXT, { deliverAs: 'steer' });
+        pi.sendUserMessage(NAG_TEXT, { deliverAs: 'steer', attribution: 'agent' });
         ctx.ui.notify(
             `Shell policy nag ${nagsSent}/${MAX_NAGS_PER_CONTEXT} sent for hit #${hits} (${programs.join(', ')}) — detector ${
                 detectorArmed ? 'still armed' : 'exhausted until compaction'
