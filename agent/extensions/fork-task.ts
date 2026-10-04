@@ -97,19 +97,16 @@ const SESSION_EXIT_CUSTOM_TYPE = "session_exit";
 
 const DESCRIPTION = `Spawn subagents exactly like \`task\` — same batch shape, agent types, models, lifecycle, result delivery, \`write agent://\` follow-up, \`agent://\`/\`history://\` — except each child starts with a copy of THIS conversation up to this call, followed by its assignment.
 
-Prefer it over \`task\` for complex work: multi-step implementation, debugging, or design follow-through whose assignment depends on what this conversation already established (requirements, decisions, findings, file contents read so far), where restating that in \`context\`/\`task\` would be long or lossy. Use \`task\` when independence matters (clean-room review, second opinion) or the needed background is short.
+Prefer it over \`task\` for complex work: multi-step implementation, debugging, or design follow-through whose assignment depends on what this conversation already established (requirements, decisions, findings, file contents read so far), where restating that in \`context\`/\`task\` would be long or lossy. Use \`task\` when independence matters — second opinions, reviews, acceptance verifiers — or the needed background is short. A forked child inherits this conversation's reasoning and anchors on it; a fresh \`task\` child does not, so hand it the code, artifacts, and question, not the conclusion.
 
 Recommended per item: keep \`isolated\` at its default \`true\` and pass \`shake: true\`.
-- \`isolated\` (default true): the child works in its own workspace and returns a patch; like any isolated task child it is not resumable afterwards. Pass \`isolated: false\` only for research-only children you want to keep messaging after they finish.
-- \`shake: true\` runs \`/shake\` (elide mode) on the inherited copy before the child starts, cutting its starting context:
-  - Elided: every text tool result regardless of size, and every fenced code block (\`\`\` or ~~~) or top-level lowercase XML element of at least 400 tokens inside user, assistant, or developer messages.
-  - Kept: the most recent ~4,000 tokens of the copy (the end of this conversation), \`skill\` results and \`skill://\` reads, reads of the current plan file, prose outside those blocks, thinking, and tool-call arguments. History already summarized by a compaction is not touched.
-  - Each elided region becomes a placeholder like \`[shaken ~N tokens — recover: artifact://<id> (region K)]\`; the child can \`read\` that artifact to get the original text back.
-  - Omit \`shake\` only when the child needs older raw outputs in front of it verbatim, not behind an artifact read.
+- \`isolated\` (default true): the child works in its own workspace and returns a patch; like any isolated task child it is not resumable afterwards. Pass \`isolated: false\` only for research-only children you want to keep messaging after they finish. In plan mode every child shares this workspace, whatever \`isolated\` says.
+- \`shake: true\` runs \`/shake\` on the inherited copy before the child starts, cutting its starting context.
+- \`effort\`: omit unless the user explicitly asks; the agent's configured binding decides model and effort.
 - The child runs its own agent's system prompt and model; it sees the conversation as background and its own assignment as the task. It does not inherit this session's todo list.
 - Each item's \`name\` gets a short unique suffix; address the child by the id reported in the result.
 
-\`context\` and each item's \`task\` follow the same rules as \`task\`: the conversation copy is background, the assignment must still state the target, change, and acceptance.`;
+\`context\` and each item's \`task\` follow the same rules as \`task\`. The conversation copy is background, so the assignment is a directive — what to do, what is in and out, what siblings handle — not a restatement of it, and still states the target, change, and acceptance.`;
 
 const forkNotice = (parentCwd: string, isolated: boolean): string =>
 	[

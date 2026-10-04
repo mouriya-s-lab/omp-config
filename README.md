@@ -24,6 +24,8 @@ Oh My Pi（OMP）配置中可以审查、可以迁移的部分，为重型编程
 |`agent/PROMPT-INJECT-*.md`|[user-prompt-inject](#user-prompt-inject) 的模板：把用户原话注入 mentor 和 discussant|`~/.omp/agent/`|
 |`agent/agents/`|subagent 定义；`README.txt` 记录编写陷阱|`~/.omp/agent/agents/`|
 |`agent/extensions/`|本地扩展，以及 `lang-nag.json`、`input-polish.json`、`doc-polish.json` 三个扩展配置|`~/.omp/agent/extensions/`|
+|`agent/extensions-last/`|必须最后加载的扩展，由 `config.yml` 的 `extensions` 末项显式加载；目前只有 [system-prompt-replace](#system-prompt-replace)|`~/.omp/agent/extensions-last/`|
+|`agent/system-prompt-replace.json`|[system-prompt-replace](#system-prompt-replace) 的替换规则|`~/.omp/agent/`|
 |`pi/agent/pi-bansos-relay-state.json`|`pi-bansos` 插件状态|`~/.pi/agent/`|
 |`install-plugins.sh`、`plugin-audit.sh`|插件安装、插件漂移检查|—|
 |`.omp/commands/`|三个维护命令的完整规则|—|
@@ -115,7 +117,7 @@ flowchart LR
 
 ### 两个方向共同的规则
 
-- **结构化配置按字段合并。** `config.yml`、`settings.json`、`thinking-translator.json`、`extensions/lang-nag.json`、`extensions/input-polish.json`、`pi-bansos-relay-state.json` 先读两边、比出有差异的字段，只改这些行，不整文件覆盖，也不重新序列化。改完用 `bun -e` 确认两端都能解析：YAML 用 `Bun.YAML.parse`，JSON 用 `JSON.parse`。
+- **结构化配置按字段合并。** `config.yml`、`settings.json`、`thinking-translator.json`、`system-prompt-replace.json`、`extensions/lang-nag.json`、`extensions/input-polish.json`、`pi-bansos-relay-state.json` 先读两边、比出有差异的字段，只改这些行，不整文件覆盖，也不重新序列化。改完用 `bun -e` 确认两端都能解析：YAML 用 `Bun.YAML.parse`，JSON 用 `JSON.parse`。
 - **`config.yml` 的本机字段两个方向都不动**，例如 `modelRoles`、`theme`、`compaction.thresholdTokens`，完整列表见 `.omp/commands/sync-omp-config.md`。
 - **应用托管的扩展两个方向都跳过**：首行为 `// @orca-managed-pi-extension`，或任意位置含 `marker: _otty`。以标记为准，不看文件名。这类文件（如 `orca-*.ts`、`otty-integration.ts`）由 Orca、Otty 自己安装和改写。
 - **运行时文件不迁移**：`*.db*`、WAL、`*.lock`、`models.yml`（含 API key）、`commandcode-models.json`（本机生成）、`last-changelog-version`、`sessions/`、`terminal-sessions/`、`blobs/`、`cache/`、日志。
@@ -124,10 +126,10 @@ flowchart LR
 
 |项目|处理方式|
 |---|---|
-|`config.yml`、`settings.json`、`thinking-translator.json`、`extensions/lang-nag.json`、`extensions/input-polish.json`|按字段合并|
+|`config.yml`、`settings.json`、`thinking-translator.json`、`system-prompt-replace.json`、`extensions/lang-nag.json`、`extensions/input-polish.json`|按字段合并|
 |`APPEND_SYSTEM.md`、`APPEND_SYSTEM_MODEL.md`、`PROMPT-INJECT-*.md`|直接覆盖；仓库没有的 `APPEND_SYSTEM_MODEL.md`、本机多出来的模板都不删|
 |`agents/`|`diff -rq` 确认范围后覆盖；和 `config.yml` 里的模型绑定一起更新，避免 agent 名和模型对不上|
-|`extensions/*.ts`|同名覆盖、缺的补齐；本机多出来的扩展不删|
+|`extensions/*.ts`、`extensions-last/*.ts`|同名覆盖、缺的补齐；本机多出来的扩展不删|
 |轻量模式三项资产|复制到 `~/.omp/agent`，并安装入口，见[轻量模式](#轻量模式)|
 |`pi-bansos-relay-state.json`|本机已有就按字段合并；没有就建目录后复制|
 |插件|按 `./plugin-audit.sh` 的分类处理，见[插件](#插件)|
@@ -140,7 +142,7 @@ flowchart LR
 
 只读本机，不写 `~/.omp`、`~/.pi`、`omp` 安装目录、PATH 或 shell 配置，本机文件的 mtime 前后不变。
 
-- **范围**：`config.yml`、`settings.json`、`APPEND_SYSTEM.md`、`APPEND_SYSTEM_MODEL.md`、`thinking-translator.json`、`PROMPT-INJECT-*.md`、轻量模式三项资产、`agents/`、`extensions/*.ts`、`extensions/lang-nag.json`、`extensions/input-polish.json`，以及 `~/.pi/agent/pi-bansos-relay-state.json`。
+- **范围**：`config.yml`、`settings.json`、`APPEND_SYSTEM.md`、`APPEND_SYSTEM_MODEL.md`、`thinking-translator.json`、`system-prompt-replace.json`、`PROMPT-INJECT-*.md`、轻量模式三项资产、`agents/`、`extensions/*.ts`、`extensions-last/*.ts`、`extensions/lang-nag.json`、`extensions/input-polish.json`，以及 `~/.pi/agent/pi-bansos-relay-state.json`。
 - **不收回**：安装到 `omp` 旁边的 `omp-light` / `omp-light.cmd`（轻量模式三项只从 `~/.omp/agent` 取）；`extensions/doc-polish.json`。
 - 本机没有 `pi-bansos-relay-state.json`（从没用 `/bansos` 改过设置）时，不算“本机已删除”，仓库保持原样。
 - `~/.omp/plugins/package.json` 的依赖和 `install-plugins.sh` 不一致时，重写脚本里的插件列表：URL/Git 依赖原样保留，npm 依赖去掉版本号。
@@ -158,7 +160,7 @@ flowchart LR
 
 `pi-bansos` 用的是 `mouriya-s-lab` 的 fork，其中的修复也提交给了上游。本机已经装了 npm 版 `pi-bansos` 时，要先 `omp plugin uninstall pi-bansos`，再装 fork。
 
-`./plugin-audit.sh` 只读，从基准提交 `5974c4fa` 起收集 `install-plugins.sh` 里出现过的插件，和 `omp plugin list` 对比后分类。`/update-omp` 按分类行动：
+`./plugin-audit.sh` 只读，从基准提交 `5974c4fa` 起收集 `install-plugins.sh` 里出现过的插件，和 `omp plugin list` 对比后分类。它读的都是已提交的版本（`git show <commit>:install-plugins.sh`，“当前列表”取 `HEAD`），而 `./install-plugins.sh` 运行的是工作区里的文件，所以改了插件列表要先提交再跑 audit。`/update-omp` 按分类行动：
 
 |分类|含义|`/update-omp` 的处理|
 |---|---|---|
@@ -171,15 +173,15 @@ GitHub URL 的插件名按 URL 最后一段推断，仓库名和包名不同时�
 
 ### 手动迁移
 
-不走 `/update-omp` 时，只复制下面的文件集，不要复制整个 `agent/`：里面还有运行时状态、`models.yml` 和 `commandcode-models.json`。先备份目标机，检查差异，然后：
+不走 `/update-omp` 时，只复制下面的文件集，不要复制整个 `agent/`：里面还有运行时状态、`models.yml` 和 `commandcode-models.json`。这是整文件复制，会用仓库版本覆盖目标机的 `config.yml`（包括本机字段，如 `compaction.thresholdTokens`）和 `extensions/doc-polish.json`，也会带上只给仓库看的 `extensions-last/README.md`；目标机已有配置时改用 `/update-omp`，或复制后恢复这些本机内容。先备份目标机，检查差异，然后：
 
 ```bash
 mkdir -p "$HOME/.omp/agent"
 cp agent/config.yml agent/settings.json agent/APPEND_SYSTEM.md \
-  agent/thinking-translator.json agent/PROMPT-INJECT-*.md \
+  agent/thinking-translator.json agent/system-prompt-replace.json agent/PROMPT-INJECT-*.md \
   agent/config-light.yml agent/APPEND_SYSTEM_LIGHT.md agent/omp-light.ts \
   "$HOME/.omp/agent/"
-cp -a agent/agents agent/extensions "$HOME/.omp/agent/"
+cp -a agent/agents agent/extensions agent/extensions-last "$HOME/.omp/agent/"
 [ -f agent/APPEND_SYSTEM_MODEL.md ] && cp agent/APPEND_SYSTEM_MODEL.md "$HOME/.omp/agent/"
 mkdir -p "$HOME/.pi/agent"
 cp pi/agent/pi-bansos-relay-state.json "$HOME/.pi/agent/"
@@ -218,8 +220,10 @@ git status --short
 
 - 用 `APPEND_SYSTEM_LIGHT.md` 代替完整的追加提示词。
 - 按 `config-light.yml` 禁用 12 个行为扩展：`ctx-post-compact-hint`、`ctx-tasklog`、`ctx-tool`、`doc-polish`、`fork-task`、`isolation-nudge`、`lang-nag`、`task-completion-judge`、`task-split-check`、`tool-policy-nag`、`user-prompt-inject`、`watchdog-agent`。
-- 其余 10 个扩展照常加载：`append-system-model`、`bro`、`input-polish`、`repo-rules`、`subagent-todo`，以及五个兼容性修复（`commandcode-model-spec`、`commandcode-usage`、`unified-exec-bun-pty`、`v2-compaction-timeout`、`xai-oauth-cost-ticks`）。`APPEND_SYSTEM_MODEL.md` 因此在轻量模式下照样注入。
-- 插件、工具、rules、skills、上下文文件，以及 model、thinking、profile、auth、session 设置都不变。
+- 其余 8 个扩展照常加载：`append-system-model`、`bro`、`input-polish`、`repo-rules`、`subagent-todo`，以及三个兼容性修复（`commandcode-model-spec`、`commandcode-usage`、`unified-exec-bun-pty`）。`APPEND_SYSTEM_MODEL.md` 因此在轻量模式下照样注入。
+- `config-light.yml` 把 `extensions` 覆盖成只有 `~/.claude`，去掉 `config.yml` 末项的 [system-prompt-replace](#system-prompt-replace)。`disabledExtensions` 只过滤按模块名发现的扩展，管不到 `config.yml` 里按路径加载的项，所以只能这样排除。`config.yml` 的 `extensions` 以后增删 `~/.claude` 之外的项时，要同步判断 `config-light.yml` 是否跟着改。
+- 插件、rules、skills、上下文文件，以及 model、thinking、profile、auth、session 设置都不变。被禁用扩展注册的工具（`ctx`、`polish_doc`、`fork_task`）在轻量模式下不存在。
+- `omp-light` 从 agent 目录读 `config-light.yml` 和 `APPEND_SYSTEM_LIGHT.md`：设置了 `PI_CODING_AGENT_DIR` 时用它，否则用 `~/.omp/agent`。缺任何一个就直接退出，不回退到别的目录。
 - `omp-light` 后面的参数原样传给 `omp`，可以覆盖入口预设的同名参数。
 
 这些覆盖只对这一个进程有效，不改任何文件。直接运行 `omp` 就是完整模式。
@@ -270,6 +274,7 @@ harness 会把 `APPEND_SYSTEM.md` 和每个 agent 的 `description` 都注入主
 - **其余工作切成最小、各有验收标准的单元，一次并行派出。** 单元能并行的条件：各有验收标准、启动不依赖其他单元的输出、文件和状态归属不重叠。只因接口或文件边界没定而不满足的，先定边界再并行。确实拆不开的，主 agent 交给一个 worker，worker 则自己做。
 - **只有 `task:high` 能派 worker**，因为切单元、定验收、划文件归属本身就是契约设计。递归最多两层：`task:high` 派出的孙代只能接可直接执行的叶子任务，也派不出 mentor。
 - **派发必须写明 `agent`。** 省略时会落到 allowlist 的第一项或被禁用的内置 agent 上。
+- **派发不覆盖 `model` 和 `effort`。** 选 tier 就是选它在 `config.yml` 里的模型绑定，不算改模型；除非用户明确要求，派发时不填 `model`、`effort`。这条写在工具说明里（`task` 的 `model` 说明经 [system-prompt-replace](#system-prompt-replace) 改写，`fork_task` 的 `effort` 说明在 `fork-task.ts`），`task:high` 定义里也有同一条，用户的要求要经派工单转达给它。
 - **worker 自测不算验收。** 派发方要检查产物和执行证据，自己做跨切片的集成检查；复杂验收交给没写这部分代码的独立 agent。重要决定同时问两个 discussant。
 
 每个 `task:*` worker 的定义还要求：
@@ -294,7 +299,7 @@ harness 会把 `APPEND_SYSTEM.md` 和每个 agent 的 `description` 都注入主
 
 ## 本地扩展
 
-`agent/extensions/` 里的扩展修补 OMP 和插件的缺陷，或补充行为约束、上下文恢复、派发检查等能力。“轻量”列表示[轻量模式](#轻量模式)下是否加载。
+`agent/extensions/` 和 `agent/extensions-last/` 里的扩展修补 OMP 和插件的缺陷，或补充行为约束、上下文恢复、派发检查等能力。“轻量”列表示[轻量模式](#轻量模式)下是否加载。
 
 |扩展|作用|轻量|
 |---|---|---|
@@ -304,6 +309,7 @@ harness 会把 `APPEND_SYSTEM.md` 和每个 agent 的 `description` 都注入主
 |[lang-nag](#lang-nag)|回复语言不对时，在下一条输入前加提醒|否|
 |[repo-rules](#repo-rules)|补读 `.claude/rules` 等 repo 级 rule 目录|是|
 |[append-system-model](#append-system-model)|按模型 / 提供商正则追加系统提示词|是|
+|[system-prompt-replace](#system-prompt-replace)|在按路径加载的扩展里最后执行，按 JSON 规则替换 system prompt 文字，用来改写内置工具说明|否|
 |[fork-task](#fork-task)|注册 `fork_task`：带着当前对话副本派 subagent|否|
 |[isolation-nudge](#isolation-nudge)|多个写入者共用目录时拦一次|否|
 |[task-split-check](#task-split-check)|拦下多主题派发和限制汇报长度的派发|否|
@@ -318,8 +324,6 @@ harness 会把 `APPEND_SYSTEM.md` 和每个 agent 的 `description` 都注入主
 |[commandcode-model-spec](#commandcode-model-spec)|修复 `--model` 指定 commandcode 模型时的认证失败|是|
 |[commandcode-usage](#commandcode-usage)|显示 Command Code 额度|是|
 |[unified-exec-bun-pty](#unified-exec-bun-pty)|让 `exec_command` 在 darwin-arm64 上支持 `tty: true`|是|
-|[v2-compaction-timeout](#v2-compaction-timeout)|把 compaction 超时从 180 秒放宽到 600 秒|是|
-|[xai-oauth-cost-ticks](#xai-oauth-cost-ticks)|给 `xai-oauth` 消息补上费用|是|
 
 ### 行为约束
 
@@ -334,11 +338,11 @@ harness 会把 `APPEND_SYSTEM.md` 和每个 agent 的 `description` 都注入主
   - 搜索：`grep` / `egrep` / `fgrep` / `rg` / `ag` / `ack` 搜文件，`awk` 读文件。
   - 编辑：`sed -i`、`perl -i`、`mv`。
   - 写文件：`echo` / `printf` / `cat` 重定向到文件。
-  - 内联脚本：`node`、`bun`、`deno`、`python`、`ruby` 的内联代码或 stdin 脚本。
+  - 内联脚本：`node`、`bun`、`deno`、`python`、`ruby` 带 `-e` / `-c` / `--eval` / `-p` 的内联代码、`deno eval`，以及以 `-` 作为脚本参数从 stdin 读的脚本。不带 `-` 的 heredoc 或 `< script` 重定向不算。
 - **eval 违规**：Python 的 `Path.read_text`、`open` 读取、`glob` / `os.listdir` 等列目录，JS 的 `readFileSync`、`Bun.file`、`readdir`、`Bun.Glob` 等。按正则匹配，是启发式判断。
-- **按命令结构解析**：识别管道、分号、引号、heredoc、命令替换和重定向；跳过 `sudo`、`doas`、`su`、`ssh` 和 `/dev/*` 目标；以 `wc` 结尾、只做计数的管道不算列目录、读或搜索。
+- **按命令结构解析**：识别管道、分号、引号、heredoc、命令替换和重定向；跳过 `sudo`、`doas`、`su`、`ssh`；`/dev/*` 目标只对读、搜索、编辑、写文件豁免，列目录照样计数。管道的有效终点是 `wc` 时（`wc` 之后还可以接不读文件的 `tr`、`sort`、`uniq`、`head`、`tail`、`grep` 等），前面的列目录、读、搜索不算违规。
 - **节奏**：前 3 次违规只记录。之后每次有违规的调用发一条 steer 消息“你为什么不遵守system prompt。”并弹出 UI 警告，每个 context 最多 3 条。发满后停止检测，直到下一次 compaction（手动，或成功的自动 compaction）。
-- **状态**：存在 session custom entry `mouriya.omp.tool-policy-nag.state`。恢复会话、切换分支或跳转会话树时，从当前分支重建；分支上的 compaction 边界会清零。
+- **状态**：存在 session custom entry `mouriya.omp.tool-policy-nag.state`。恢复会话、切换分支或跳转会话树时，从当前分支重建：分支上的 `compaction`、`reset_boundary`（`/clear`）、`branch_summary` 边界会清零，之后的状态照常恢复，所以切到一个已经发满的分支仍保持停止检测。
 
 #### watchdog-agent
 
@@ -406,7 +410,7 @@ option.blocker.delivery: steer
 - **transcript**：按 `scope` 取，`full` 为整条分支，`window` 为上次运行之后的消息。包含用户、assistant、工具调用与结果的文字，不截断，不含自己注入的 `<watchdog>` 消息。
 - **注入**：聊天 reviewer 不通过，或 Jev 选中带 prompt 的选项时，运行一结束就以 `<watchdog name=… severity=…>` 注入匹配的会话，时机按 `delivery`：`aside` 在运行中插到下一个 step 边界、空闲时开启新一轮；`steer` 打断当前运行；`followUp` 排到当前运行之后；`nextTurn` 等用户下一次提问。
 - **识别会话**：主会话按文件名 `<时间戳>_<uuid>.jsonl` 识别，subagent 从 `session_init.agent` 读名字。
-- **去重与封顶**：每个 watchdog 按提醒文本去重；设置了 `maxPerContext` 时按它封顶，封顶后到下次压缩前不再运行审阅。去重记录和封顶计数只在当前 context 内有效，每次压缩（手动或自动）后清零，所以 Jev 同一选项的 prompt 每个 watchdog 在两次压缩之间最多发一次。压缩不影响累计的操作条数、`window` 游标和正在进行的判定。分支切换和树跳转会重置全部计数、游标和封顶，并丢弃还没返回的判定。
+- **去重与封顶**：每个 watchdog 按提醒文本去重；设置了 `maxPerContext` 时按它封顶，封顶后到下次压缩前不再运行审阅。去重记录和封顶计数只在内存里，每次压缩（手动或自动）后清零，所以 Jev 同一选项的 prompt 每个 watchdog 在两次压缩之间最多发一次。压缩不影响累计的操作条数、`window` 游标和正在进行的判定。会话启动或恢复、`session_switch`、分支切换和树跳转会重置全部计数、游标、去重和封顶，并丢弃还没返回的判定；只有 `/watchdog` 的会话覆盖随分支持久化。
 - **失败**：任何失败都不提醒，也不阻塞主轮次。subagent 上的注入是尽力而为，只有执行器收走结果前会话被重新打开才生效。
 - **用量**：聊天 reviewer 用禁止加载扩展的内存会话，不会递归。Jev 的用量和估算费用只写扩展 info 日志，不计入会话用量。两种后端各自消耗额度。
 
@@ -432,7 +436,7 @@ option.blocker.delivery: steer
 |---|---|
 |`target`（必填）|agent 名（如 `mentor:default`），逗号分隔可写多个；`*` 表示所有 subagent。主会话不注入|
 |`name`|注入块的名字，缺省取文件名里的标签|
-|`enabled`|默认 `true`；写成其他值就不加载|
+|`enabled`|默认 `true`；写了的话，只有 `true`、`yes`、`on`、`1`（不区分大小写，可带引号）算开启，其他值不加载|
 
 **占位符。** 正文是模板。`user_prompt` 是用户 prompt 的数组，按时间顺序，0 是第一条：
 
@@ -443,12 +447,12 @@ option.blocker.delivery: steer
 |`{{user_prompt[3:e]}}`|切片，`e` 表示结尾；不含右端点，与数组切片相同，两端都可以写负数|
 
 - 单条越界时为空；切片两端夹到 `[0, 长度]`，起点不小于终点时为空。
-- 单条原样插入文字；切片的每一项写成 `<user_prompt index="N">…</user_prompt>`，`N` 是从 0 开始的位置。
+- 单条插入取出的文字；切片的每一项写成 `<user_prompt index="N">…</user_prompt>`，`N` 是从 0 开始的位置。
 - 其他 `{{user_prompt…}}` 写法（如 `{{user_prompt}}`、`{{user_prompt[:3]}}`）让整个文件跳过并记 warning。用户 prompt 里出现的占位符原样保留，不再展开。
 
 仓库的 `agent/PROMPT-INJECT-user-goal.md` 投给 `mentor:default`、`discuss:steady`、`discuss:divergent`，用 `{{user_prompt[0:e]}}` 注入全部用户 prompt，并要求它们以用户原话为准，指出对方计划偏离的地方。
 
-**用户 prompt 的来源。** 从本 subagent 沿 `ctx.agent.parentId` 在进程的 agent registry 里往上找到主会话（`task:high` 派出的孙代也一样），读它当前分支（`getBranch()`，compact 之前的消息也在）上 `role: "user"`、`attribution: "user"`、非 `synthetic` 的消息文字，按顺序排列。
+**用户 prompt 的来源。** 从本 subagent 沿 `ctx.agent.parentId` 在进程的 agent registry 里往上找到主会话（`task:high` 派出的孙代也一样），读它当前分支（`getBranch()`，compact 之前的消息也在）上 `role: "user"`、`attribution: "user"`、非 `synthetic` 的消息，按顺序排列。每条只取文本块（多个文本块用换行拼接），去掉首尾空白；取完是空的消息（比如只有图片）不占位置，所以下标只数有文字的 prompt。
 
 - 输入经过 `input` 钩子和命令展开后才存进会话，所以取到的是提交给模型的文字；例如 [lang-nag](#lang-nag) 加在前面的 `instruction` 也在里面。
 - `attribution` 由发送方决定，扩展用 `sendUserMessage` 不写它时默认是 `user`。本仓库扩展注入的消息因此都标为 `agent`：`watchdog-agent`、`tool-policy-nag`、`ctx-post-compact-hint`、`doc-polish` 的结果回传。新增会注入用户消息的扩展时也要这样写，否则它的消息会被当成用户原话。插件注入的消息不受本仓库控制。
@@ -472,12 +476,12 @@ option.blocker.delivery: steer
 
 #### repo-rules
 
-`repo-rules.ts` 补读 OMP 原生不读的 repo 级 rule。OMP 原生读 `.omp/rules`、`.agent(s)/rules`、`.cursor/rules`、`.windsurf/rules`、`.clinerules`、`.github/instructions`，而且 rule 必须有 `alwaysApply: true` 或 `description`，没有 frontmatter 的文件会被忽略；`.claude/rules` 和 `.pi/rules` 则完全不读，仓库给 Claude Code 或旧版 pi 写的规则因此被忽略。
+`repo-rules.ts` 补读 OMP 原生不读的 repo 级 rule。OMP 原生读 `.omp/rules`、`.agent(s)/rules`、`.cursor/rules`、`.windsurf/rules`、`.clinerules`、`.github/instructions`；`.claude/rules` 和 `.pi/rules` 则完全不读，仓库给 Claude Code 或旧版 pi 写的规则因此被忽略。
 
 - **扫描**：会话开始时，从 cwd 往上到仓库根（第一个含 `.git` 的目录；没有就只扫 cwd），每层递归扫描 `.claude/rules`、`.agents/rules`、`.pi/rules` 下的 `.md` / `.mdc`，跳过隐藏文件。
 - **注入还是列目录**：没有 frontmatter，或 `alwaysApply: true` 的，注入正文；其余有 frontmatter 的，只列出名字、`description` 和路径，供需要时 `read`。
 - **同名**：按去掉扩展名的文件名判断，离 cwd 近的优先；同一层按 `.claude`、`.agents`、`.pi` 的顺序。
-- **注入位置**：每次 `before_agent_start` 追加一个 `<repo-level-rules>` 块。正文按空白归一后，已经整段出现在现有 system prompt 里的跳过，所以原生已加载的规则、用户级规则的同一份拷贝不会重复注入。用户级 rule 交给宿主处理。
+- **注入位置**：每次 `before_agent_start` 追加一个 `<repo-level-rules>` 块。要注入正文的规则，正文按空白归一后已经整段出现在本次收到的 system prompt 里就跳过，所以原生已加载的规则、用户级规则的同一份拷贝不会重复注入；但扫描到的两个不同文件名、正文相同的规则会各注入一次。只列目录的规则，system prompt 里已经有 `rule://<文件名>`（原生 rulebook 有同名规则）时不列。用户级 rule 交给宿主处理。
 
 #### append-system-model
 
@@ -505,13 +509,49 @@ model: "(gpt-5|o3)"
 - **匹配**：每块至少写一个字段；写了的字段都匹配才生效。正则不自动锚定，需要时自己写 `^` / `$`；YAML 会误读的写法（以 `(`、`*`、`[` 等开头）加引号。
 - **注入**：所有生效的块按文件顺序拼成一个额外的 system prompt 块，加在末尾。正文里不能有单独一行 `---`，它总会开启新的头；分隔线用 `***`。
 - **时机**：每次 `before_agent_start`，主会话和每个 subagent 都按各自的模型匹配。每条 prompt 重新读文件，所以改文件、`/model` 切换都从下一条 prompt 生效，不用重启。一轮内 auto-retry 换了模型时，沿用这一轮开始时选中的块。
-- **失败**：读不了文件或格式错误（未知字段、正则无效、正文为空、`---` 没闭合等）时不注入，按行号记 warning，同一错误只记一次；不阻塞 prompt。
+- **失败**：文件不存在时静默不注入；读不了文件时每次都记 warning（不带行号）；格式错误（未知字段、正则无效、正文为空、`---` 没闭合等）时不注入，按行号记 warning，同一错误连续出现只记一次，错误变了或中间读成功过就再记。都不阻塞 prompt。
+
+#### system-prompt-replace
+
+`extensions-last/system-prompt-replace.ts` 对 system prompt 做文字替换。OMP 内置的提示词模板（包括工具说明）打包在程序里，没有覆盖目录；本仓库打开了 `inlineToolDescriptors`，内置工具的说明拼在 system prompt 里。和 `APPEND_SYSTEM.md` 冲突的句子，例如 `task` 工具的 “Omit \`agent\` only for default (\`task\`); NEVER specify it.”，只能靠改写 system prompt 文字修正。
+
+**规则文件**：agent 目录（默认 `~/.omp/agent`，随 profile 变化）下的 `system-prompt-replace.json`：
+
+```json
+{
+  "replacements": [
+    { "literal": "原文", "replace": "替换文字" },
+    { "regex": "JavaScript 正则源码", "replace": "替换文字，可用 $1" }
+  ]
+}
+```
+
+- 每条规则 `literal`、`regex` 二选一，再加 `replace`；其他键、空匹配串、无效正则都让整个文件不生效。
+- `literal` 替换所有出现处，`replace` 里的 `$` 没有特殊含义。`regex` 自动加 `g`，`replace` 按 `String.prototype.replace` 解释 `$1`、`$&`。
+- 规则按文件顺序依次作用于每个 system prompt 块，后一条看到的是前一条替换后的结果。
+- 仓库里的规则（都是改 OMP 内置 prompt 里的句子）：
+  - `task` 工具那句换成 “Always set \`agent\` explicitly; never rely on the default.”，和 `APPEND_SYSTEM.md` 要求写明 agent 一致。默认 agent 名用正则匹配，所以 `spawns` 不同、默认 agent 不同的 subagent 也能命中。
+  - `task` 的 `model` 参数说明 “Omit unless a specific model is needed.” 换成 “Omit unless the user explicitly asks for a specific model.”。
+  - `todo` 的 “Before work, init for 3+ steps, …” 换成：动手前就 `init`，任何多步工作都要；改动按 context 记录、经 `ctx` 读回；列表跟随当前范围而不是最初的计划，工作一变（新的或修改的指令、计划变化、发现要增删步骤）就立即 `append`、`rm`/`drop` 或重新 `init`。
+  - Engineering 的 “NEVER rerun checks to confirm them.” 换成 “NEVER rerun checks to doubt them. Reproducing to locate the cause and confirming the fix still apply.”：用户报的问题不用复跑去怀疑，但为定位原因复现、修完确认仍要做，和 Workflow 的 “reproduce before; confirm after” 不再冲突。
+  - “Compiled code: NEVER avoidable allocation, …” 补上谓语 `add`。
+- 关于某个工具怎么用的规则，优先改写该工具的说明，而不是写进 `APPEND_SYSTEM.md`：subagent 收不到附录，但能看到工具说明，规则只写一处就覆盖所有会话。附录只保留编排逻辑，并要求遵守 `todo` 工具的规则。
+- 改写工具说明依赖 `config.yml` 的 `inlineToolDescriptors: "on"`：打开时完整工具说明都写进 system prompt。默认的 `auto` 只对 Gemini 这样做，`off` 一律不做；不写进 system prompt、又走原生 tool calling 时，system prompt 只列工具名，说明随 `tools[]` 发送，这类规则就失效了。
+- 内置 prompt 的规则句常省略主语，以覆盖所有场景；改写时保持这种写法，只补意思，不加明确主语。
+
+**最后执行**：`before_agent_start` 按扩展的加载顺序串行执行，每个 handler 拿到的是前一个返回的 system prompt。加载顺序是：native 发现（`~/.omp/agent/extensions/`、`settings.json` 的 `extensions`，含 `~/.claude`）→ hooks → 插件扩展 → `-e` 参数 → `config.yml` 的 `extensions`（按列表顺序）→ OMP 内置的 inline 扩展（SDK 传入的扩展、autoresearch、`.omp/tools/` 等自定义工具的包装）；同一路径只加载第一次出现的那个。因此本扩展放在 `extensions/` 之外的 `extensions-last/`，并写成 `config.yml` 中 `extensions` 的最后一项，在所有按路径加载的扩展之后执行。放进 `extensions/` 会随 native 批次提前加载，`config.yml` 里的条目也会被当成重复路径丢掉。以后往 `config.yml` 的 `extensions` 加条目，要写在它前面。inline 扩展仍在它之后：其中 autoresearch 在 `/autoresearch` 模式下会改写 system prompt，那时它加的文字不经过这里的替换。
+
+`extensions/` 目录内部没有排序：顺序取决于 native `glob` 遍历返回的顺序，不是文件名顺序，所以不能用文件名前缀控制先后。需要确定顺序的，只能靠 `config.yml` 的 `extensions` 列表。
+
+- **时机**：每次 `before_agent_start`，主会话和每个 subagent 都执行，轻量模式除外（见[轻量模式](#轻量模式)）。每条 prompt 重新读规则文件，改规则不用重启；改扩展本身要重启。
+- **失败**：规则文件不存在时不替换。JSON 或规则格式错误时不替换，记 warning，同一错误连续出现只记一次。某条规则的目标在主会话的 system prompt 里一处都找不到时（升级 OMP 后模板文字变了，或规则写错），每条规则每个进程警告一次：交互模式弹 UI 警告，headless 写 stderr，同时记日志。subagent 不做这项检查，它们的 prompt 本来就可能没有目标文字（比如不能派发的 worker 没有 `task` 工具说明）。都不阻塞 prompt。
+- **范围**：只改 system prompt，不改随请求单独发送的工具 schema。`config.yml` 里的路径写死 `~/.omp/agent`，用 `PI_CODING_AGENT_DIR` 换 agent 目录时要同步改这一项。
 
 ### 派发与交付
 
 #### fork-task
 
-`fork-task.ts` 注册 `fork_task` 工具。参数和 `task` 的批量形式相同，派出的也是原生 `task` 子代理：用自己的 agent 定义、模型和工具，Hub、`agent://`、`history://`、隔离与 patch 合并都走原生路径。区别在于子代理的初始 transcript 是调用方当前对话的副本，之后才是派工单。
+`fork-task.ts` 注册 `fork_task` 工具。参数沿用 `task` 的批量形式（顶层 `context` 加 `tasks[]`），但每项没有 `model` 和 `solutionSpace`；派出的也是原生 `task` 子代理：用自己的 agent 定义、模型和工具，Hub、`agent://`、`history://`、隔离与 patch 合并都走原生路径。区别在于子代理的初始 transcript 是调用方当前对话的副本，之后才是派工单。
 
 适合派工单依赖本对话已有的需求、决定和已读内容的多步实现、调试或设计落地；需要独立视角，或背景很短时用 `task`。
 
@@ -522,7 +562,7 @@ model: "(gpt-5|o3)"
 - `name` 会加 `_xxxx` 后缀，子代理 id 以结果为准。
 - 需要 `async.enabled: true`，否则报错。
 
-**shake 的效果**：最近约 4,000 token 原样保留。更早的部分里，所有文本工具结果、消息中不少于 400 token 的围栏代码块和顶层小写 XML 元素，被替换成 `[shaken ~N tokens — recover: artifact://<id> (region K)]`，子代理可以 `read` 取回原文。`skill` 结果、`skill://` 读取、当前 plan 文件的读取、块外正文、thinking 和工具调用参数不动，已被 compaction 概括的历史不处理。
+**shake 的效果**：最近约 4,000 token 受保护，但其中被标记为 useless 的非错误工具结果照样会被省略。更早的部分里，所有文本工具结果、消息中不少于 400 token 的围栏代码块和顶层小写 XML 元素，被替换成 `[shaken ~N tokens — recover: artifact://<id> (region K)]`，子代理可以 `read` 取回原文。`skill` 结果、`skill://` 读取、当前 plan 文件的读取、块外正文、thinking 和工具调用参数不动，已被 compaction 概括的历史不处理。
 
 **实现**：
 
@@ -544,7 +584,7 @@ model: "(gpt-5|o3)"
 
 #### task-split-check
 
-`task-split-check.ts` 在 `tool_call` 阶段用模型检查 `task` / `fork_task` 的每个派发项（共享 `context` 加该项的 `task`），有一项不合格就拦下整次调用。
+`task-split-check.ts` 在 `tool_call` 阶段用模型检查 `task` / `fork_task` 的每个派发项（共享 `context` 加该项的 `task`），有一项不合格就拦下整次调用。`split` 只按该项的 `task` 判断，共享 `context` 只作背景；`report-limit` 两者都看。
 
 |检查|范围|问的问题|原样重派|
 |---|---|---|---|
@@ -565,17 +605,17 @@ model: "(gpt-5|o3)"
 - **状态本来就按会话隔离**：每个 `AgentSession` 有自己的 `TodoTracker`，停止时的完成度提醒、中途提醒和分支恢复都只看所在会话，subagent 的 todo 不会碰到父会话的列表。
 - **做法**：每次 `before_agent_start`（执行器过滤之后）通过 agent registry 找到本会话的 `AgentSession`，把绑定到该会话的原生 `TodoTool` 作为宿主工具装上。工具名仍是 `todo`，结果的持久化和恢复与内置工具一样。已经有 `todo` 的会话（主会话、启用了 prewalk 的 subagent）和 `task:*` 以外的 agent 不处理。
 - **和 ctx 的关系**：`TodoTracker` 仍是所在会话当前 todo 状态的源头；在完整模式中，每次成功修改由 `ctx-tasklog` 追加为派生事件记录，`ctx-tool` 再按事件重放任务数量和最终时间线。记录来自成功的工具结果，而不是 worker 自述。主会话 compact 后，`ctx-post-compact-hint` 会把主会话的时间线强制注入；其他 subagent 的时间线通过 `ctx show <id>` 读取。
-- **和 `yield` 的关系**：原生的完成度提醒只在纯文字结束时把 agent 打回；终结性的 `yield` 会直接结束运行，不经过它。worker 带着未完成的 todo 调用 `yield` 时，由 [task-completion-judge](#task-completion-judge) 判断是退回“没做完”还是要求先维护 todo。
+- **和 `yield` 的关系**：原生的完成度提醒只在纯文字结束时把 agent 打回；终结性的 `yield` 会直接结束运行，不经过它。完整模式下，`task:low` / `task:mid` / `task:free` 带着未完成的 todo 调用 `yield` 时，由 [task-completion-judge](#task-completion-judge) 判断是退回“没做完”还是要求先维护 todo；`task:high` 和轻量模式没有这道检查。
 - 失败只记 warning。
 
 #### task-completion-judge
 
 `task-completion-judge.ts` 在 `task:low`、`task:mid`、`task:free` 的会话里拦截交付用的 `yield`，先让模型判断这个切片是否真的做完了。`task:high` 和主 agent 不受影响。
 
-- **依据**：派工单，即执行器写进本次运行 `session_init` 的 `task` prompt（`task` 和 `fork_task` 都一样）；system prompt 里的共享背景；`session_init` 之后该 worker 自己最近 50 次工具调用及结果；这次提交的内容。`fork_task` 子代理开头继承的父对话只是背景，其中的用户消息和工具调用都不算。
+- **依据**：派工单，即执行器写进本次运行 `session_init` 的 `task` prompt（`task` 和 `fork_task` 都一样）；system prompt 里的共享背景；`session_init` 之后该 worker 自己最近 50 次工具调用及结果；这次提交的内容。`fork_task` 子代理开头继承的父对话只是背景，其中的用户消息和工具调用都不算。每次调用的参数和结果各截到 800 字符，提交内容截到 6000 字符，超长时保留头尾、省略中间。
 - **判定**：`openai-codex/gpt-6-sol`（推理强度 low），25 秒超时，回答 `DONE` 或 `NOT_DONE`。如实报告了 blocker 也算 `NOT_DONE`。
-- **退回**：判为 `NOT_DONE` 时拦下这次 `yield`，要求继续做完并验证；判为 `DONE` 但 worker 自己的 todo 还有未完成项时，也拦下，要求先把 todo 更新到真实进度。每种退回最多一次；一旦放行，同一会话不再判定。
-- **结果附注**：`yield` 的数据结构是开放对象（没有自定义 `outputSchema`）时，放行的交付里附上 `completion_judge`（判定、理由、是否退回过），派发方能看到。
+- **退回**：判为 `NOT_DONE` 时拦下这次 `yield`，要求继续做完并验证；判为 `DONE` 但 worker 自己的 todo 还有未完成项时，也拦下，要求先把 todo 更新到真实进度。两种退回各最多一次，可以先后各发生一次；一旦放行，同一会话不再判定。
+- **结果附注**：`yield` 的数据结构是开放对象（没有自定义 `outputSchema`）时，放行的交付里附上 `completion_judge`（判定、理由、`bounced`），派发方能看到。`bounced` 只表示是否因 `NOT_DONE` 退回过，todo 退回不计入。
 - **不判定的情况**：带错误的 `yield`、增量提交；会话分支上没有 `session_init`（不是 task 运行）；模型不可用、请求失败、超时或回答无法识别时直接放行，不附注。
 - 状态只在内存里，会话结束时清除；每次判定写一条 info 日志。
 
@@ -587,18 +627,18 @@ model: "(gpt-5|o3)"
 
 `ctx-tool.ts` 注册只读的 `ctx` 工具，把当前会话、subagent registry、transcript、compaction 摘要、sidecar summary 和 task log 拼成一棵上下文树。不修改会话或文件。
 
-- **`ctx list [<id>] [all=true]`**：深度优先，每行一个 context，含状态、摘要和任务计数（`done/total`，有阻塞时附 blocked）。同级按创建时间排序。
+- **`ctx list [<id>] [all=true]`**：深度优先，每行一个 context，含状态、摘要和任务计数（`done/total`，有阻塞时附 blocked）。同级按创建时间排序；默认视图里从隐藏节点提升上来的后代留在原位，不重新排序。
   - 默认只显示主会话和 `task` / `task:*` 子代理，mentor、discuss、trace 等其他 context 隐藏，其可见后代提升到上一级，并给出隐藏数量；`all=true` 全部列出。
   - 非根节点的后代超过 8 个时折叠成一行，用 `ctx list <id>` 展开。
 - **`ctx show <id>`**：handoff 加 `## Tasks` 时间线。
-  - 主会话的 handoff 取当前分支最新的 compaction 摘要；子代理取相邻的 `.md` / `.json` sidecar。
-  - 时间线由 task log 里的 todo 操作重放而来，分 `Completed` 和 `Open` 两段，按最后一次操作的本地时间排序，每个任务只保留最终状态：`start` / `block` / `unblock` 算 open，`done` 算 completed，`drop` / `rm` 移除，`init` 清空重来；`block` 的原因附在 open 项后面。
+  - 查询当前会话时，handoff 取当前分支最新的 compaction 摘要（没有就显示 `(none)`）；查询其他 context 时取相邻的 `.md` / `.json` sidecar。
+  - 时间线由 task log 里的 todo 操作重放而来，分 `Completed` 和 `Open` 两段，按最后一次操作的本地时间排序，每个任务只保留最终状态：`start` / `block` / `unblock` 算 open，`done` 算 completed，`drop` / `rm` 移除，`init` 清空重来；`block` 的原因附在 open 项后面。`init` / `append` 只记数量、不记任务名，所以只建过、还没被单独操作的任务计入 `ctx list` 的总数，但不出现在时间线里。
   - id 先精确匹配，再忽略大小写匹配；找不到时报错并列出已知 id。
 - **性能**：transcript 的修改时间和大小没变时，复用缓存的会话头；新增或变化的 transcript 读到会话头和 `session_init` 就停。
 
 #### ctx-tasklog
 
-`ctx-tasklog.ts` 在每次成功的 `todo` / `goal` 修改操作后，把本地时间、工具名、操作和详情追加到 local root 下的 `task-log/<agent-id>.md`，供 `ctx` 重放。`todo view` 和 `goal get` 不改变状态，因此不记；失败的工具调用也不记。详情随操作而定：`init` 记阶段和任务数，`start` / `done` / `block` 等记任务（`block` 附原因），`goal` 记目标。这使行事记录绑定到实际成功的状态变更，而不是模型声称做过什么。写失败只记 warning。
+`ctx-tasklog.ts` 在每次成功的 `todo` / `goal` 修改操作后，把本地时间、工具名、操作和详情追加到 local root 下的 `task-log/<agent-id>.md`。`ctx` 只重放其中的 `todo` 事件，`goal` 事件记下来但不进计数和时间线。`todo view` 和 `goal get` 不改变状态，因此不记；失败的工具调用也不记。详情随操作而定：`init` 记阶段和任务数，`start` / `done` / `block` 等记任务（`block` 附原因），`goal` 记目标。这使行事记录绑定到实际成功的状态变更，而不是模型声称做过什么。写失败只记 warning。
 
 #### ctx-post-compact-hint
 
@@ -622,19 +662,19 @@ model: "(gpt-5|o3)"
 
 **配置**：
 
-- 优先级：工具参数 > `doc-polish.json` > 当前会话模型。`doc-polish.json` 整份生效：cwd 下的能解析就用它，否则用扩展目录下的。键为 `splitModel`、`polishModel`、`checkModel`、`concurrency`。
+- 优先级：工具参数 > `doc-polish.json` > 当前会话模型；`checkModel` 都没给时跟 `splitModel` 用同一个。`doc-polish.json` 整份生效：cwd 下的能解析就用它，否则用扩展目录下的。键为 `splitModel`、`polishModel`、`checkModel`、`concurrency`。
 - 仓库里的 `doc-polish.json` 设了拆分、润色模型和并发 8；没配置时并发默认 6。
 - `/polish-doc` 只接受路径，不能覆盖模型和并发。
 
 **失败处理**：
 
-- 配置文件里的模型解析不到时，直接中止本次调用并返回说明，让主 agent 向用户解释三个模型的作用，由用户决定。
+- 按上面的优先级选出的三个模型，只要有一个不在可用模型列表里（只查列表，不发请求），调用就直接报错，不做任何处理：不拆分、不派子代理、不写 `/tmp/doc-polish/`。被工具参数覆盖掉的配置项不检查。报错内容列出缺的是哪个角色、哪个模型、来自参数、配置还是当前会话，以及三个模型各管什么。模型调用 `polish_doc` 时是一个错误的工具结果（`isError`）；人用 `/polish-doc` 时弹错误通知。
 - 模型存在但请求失败（不在套餐内、限流、网络错误）时，该子代理最多尝试 3 次，仍失败就报错，内容包含角色、模型全名、失败次数和 provider 原始报错。
 - 润色输出解析不了时不重试：该批保留原文，并在评审里标出。
 
 **流程**：拆分之后都是程序逻辑。润色批次全部并发，汇齐后按 `sourceIndices` 用并查集识别段落合并、重新编组，再并发校验，最后按原顺序写出评审。子代理禁止加载扩展，不会递归。
 
-**结果**：模型调用时，评审路径和“仅供参考”的说明作为工具结果返回；人调用 `/polish-doc` 时，同样的内容作为新输入交给主 agent。副作用是写 `/tmp/doc-polish/`，按批消耗所选模型的额度。
+**结果**：模型调用时，评审路径和“仅供参考”的说明作为工具结果返回；人调用 `/polish-doc` 时，同样的内容作为新输入交给主 agent。结果里还附带对接收方的硬性要求：必须亲自处理、不得转交子代理，并且要把每份评审完整读完，不许分页、截断或只看摘要。副作用是写 `/tmp/doc-polish/`，按批消耗所选模型的额度。
 
 #### bro
 
@@ -644,8 +684,8 @@ model: "(gpt-5|o3)"
 |---|---|
 |`/bro` 或 `/bro simplify`|等当前会话空闲后，解释最近一条正常结束的 assistant 回复|
 |`/bro simplify <text>`|解释给定的文字|
-|`/bro file <path>`|解释 cwd 内的文件：`.md` / `.markdown` / `.txt` 直接读，`.pdf` / `.docx` / `.pptx` / `.xlsx` / `.epub` 先转成 Markdown。上限 10 MiB，扫描版 PDF 不做 OCR|
-|`/bro url <url>`|抓取公网 HTML 页面后解释：只接受 HTTP(S)，拒绝私有地址，最多 5 次重定向，25 秒超时，5 MiB 上限，不运行页面 JS|
+|`/bro file <path>`|解释 cwd 内的文件：`.md` / `.markdown` / `.txt` 直接读，`.pdf` / `.docx` / `.pptx` / `.xlsx` / `.epub` 先转成 Markdown。文件上限 10 MiB，取出的文字上限 100,000 字符，扫描版 PDF 不做 OCR|
+|`/bro url <url>`|抓取公网 HTML 页面后解释：只接受 HTTP(S)，拒绝私有地址，最多 5 次重定向，25 秒超时，5 MiB 上限，开标签超过 100,000 个或转成的文字超过 100,000 字符时拒绝，不运行页面 JS|
 |`/bro open`|重新打开上一次的解释|
 |`/bro model` / `effort` / `mode`|设置模型、推理强度、模式（`brief`、`balanced`、`faithful`）；不带参数时在 TUI 里选|
 |`/bro doctor`|检查设置、自定义 prompt、模型可用性和推理强度|
@@ -669,11 +709,11 @@ overlay 里上下键或滚轮滚动，`C` 复制到系统剪贴板，`R` 重新�
 
 润色期间和预览期间的按键都由 raw terminal-input 监听先处理：`Enter` 只在润色完成后生效，其余按键（包括重复的组合键）吞掉，不会漏进输入框。`Enter` 接受时先关闭 overlay，让焦点回到输入框，再改输入框文字并放行这次回车。
 
-- **配置** `input-polish.json`：`model`、`instruction` 必填。`model` 可带 `:effort` 后缀指定 thinking，不带则关闭；`instruction` 是改写要求，只写在这个文件里，扩展代码里没有默认值，固定的保真规则由扩展另行附加，不受它影响；`key` 可选，取 `ctrl+enter`（默认）或 `alt+enter`。cwd 下的文件优先于扩展目录下的，只在会话开始或切换时读取；缺失或格式错误（包括缺 `instruction`）时扩展不生效。仓库里的值是 `opencode-go/muse-spark-1.3-contributor:high`、`ctrl+enter`，以及“在不改变原意的前提下，改写到听起来会让人更加想努力、能激动人心，但不要太夸张。”
+- **配置** `input-polish.json`：`model`、`instruction` 必填。`model` 可带 `:effort` 后缀指定 thinking，不带则关闭；`instruction` 是改写要求，只写在这个文件里，扩展代码里没有默认值，固定的保真规则由扩展另行附加，不受它影响；`key` 可选，取 `ctrl+enter`（默认）或 `alt+enter`。依次尝试 cwd 下和扩展目录下的文件，第一个存在且有效的生效；cwd 下的文件缺失或格式错误（包括缺 `instruction`）时回退到扩展目录下的，两个都无效时扩展不生效。只在会话开始或切换时读取。仓库里的值是 `opencode-go/muse-spark-1.3-contributor:high`、`ctrl+enter`，以及“在不改变原意的前提下，改写到听起来会让人更加想努力、能激动人心，但不要太夸张。”
 - **键位**：`ctrl+enter` 要求终端能把它和回车区分开（Kitty 键盘协议或 modifyOtherKeys）；区分不了的终端里它和回车一样，扩展触发不了，改用 `alt+enter`（macOS 上的 Option+Enter，终端需把 Option 当 Meta）。组合键在草稿会被润色时盖过 OMP 默认的 follow-up 绑定 `ctrl+enter`；`Ctrl+Q` 发送 follow-up 不受影响。
 - **不润色的草稿**：空草稿，以 `/`（斜杠命令）、`!`（bash）、`$`（python）开头的草稿。这些情况组合键原样交给 OMP。
 - **保真**：prompt 要求保留原语言、代码、路径、标识符和 `[Paste #N …]`、`[Image #N …]` 占位符，不新增也不丢失要求。改写里占位符缺失或被改动时按失败处理，不应用。
-- **失败**：模型不可用（弹警告）、请求失败、输出为空、占位符对不上；overlay 显示原因，`Esc` 关闭，输入框不变。
+- **失败**：模型不可用时只弹警告，不打开 overlay。请求失败、输出为空、占位符对不上时，overlay 显示原因，`Esc` 关闭。输入框都不变。
 - **辅助会话**：无工具、内存会话、空 system prompt、不加载扩展、`taskDepth: 1`。每次润色消耗一次所选模型的请求。
 
 ### 兼容性修复
@@ -699,9 +739,10 @@ overlay 里上下键或滚轮滚动，`C` 复制到系统剪贴板，`R` 重新�
 扩展加载时就准备 `pi-unified-exec` 的可选依赖 `@homebridge/node-pty-prebuilt-multiarch` 的原生绑定，结果缓存在 `~/.omp/unified-exec-bun-pty-binding/<包版本>-darwin-arm64/`（设置了 `PI_CODING_AGENT_DIR` 时换成它的上一级目录）。顺序：
 
 1. 缓存里的绑定能在 Bun 里加载，就直接用。
-2. 缓存目录里有失败标记 `build-failure.txt` 时不再重试，要删掉标记或整个目录才会重来。
-3. 用 `prebuild-install` 下载预编译包，依次尝试多个 Node 版本的 ABI，选能在 Bun 里加载的。
-4. 都不行才用 `node-gyp` 源码构建，超时 120 秒。
+2. 缓存目录里有失败标记 `build-failure.txt` 时不再重试，要删掉标记或整个目录才会重来。缓存里已有但在 Bun 里加载不了的 `pty.node` / `spawn-helper` 也会挡住后续下载和构建的结果写入，这种情况要删掉整个缓存目录。
+3. 先准备构建输入（已安装包旁的 `node-addon-api`、`binding.gyp`、`src/unix/pty.cc`、`src/unix/spawn-helper.cc`）。缺了就直接失败并写失败标记，不会去下载。
+4. 用 `prebuild-install` 下载预编译包，依次尝试当前 Node 版本和 24、22、20、18 的 ABI，选能在 Bun 里加载的；每次尝试单独限时 120 秒。
+5. 都不行才用 `node-gyp` 源码构建，超时 120 秒。这些步骤在扩展加载时依次同步执行，没有总时限。
 
 失败时在会话开始时记 warning，兼容层跳过。
 
@@ -726,18 +767,11 @@ rm -f "$pty_root/build-failure.txt"
 - 解压后必须有 `build/Release/pty.node` 和 `build/Release/spawn-helper`，且 `pty.node` 要能在 Bun 里加载。
 - 归档解到 `~/.omp/unified-exec-bun-pty-binding/` 下，不要解到 `extensions/`。
 
-#### v2-compaction-timeout
-
-`v2-compaction-timeout.ts` 把进程里所有 `AbortSignal.timeout(180000)` 改成 `600000`，其他时长原样传递。在 pi-agent-core 里，180 秒只用于 V2 和 remote compaction，所以实际效果是放宽 compaction 超时。进程级幂等，记录安装和每次延长。
-
-#### xai-oauth-cost-ticks
-
-`xai-oauth-cost-ticks.ts` 包装 `fetch`，从发往 `api.x.ai` 的 `/responses` 和 `/chat/completions` POST 响应（SSE 或 JSON）里取 `usage.cost_in_usd_ticks`，在 `message_end` 时给 `xai-oauth` 的 assistant 消息补上 `usage.cost.total`。只替换为零或无效的已有费用，不新建字段。重复加载不会重复包装。
-
 ## 维护须知
 
 - **没有测试和 CI。** 扩展改动的唯一证明是运行时验证：用 `/update-omp` 应用，重启 OMP，实际触发对应的工具、命令或钩子，看输出和副作用。
 - **扩展建的辅助会话必须传 `taskDepth: 1`。** 目前有六处：`bro`、`doc-polish`、`input-polish`、`lang-nag`、`watchdog-agent` 的聊天 reviewer、`fork-task` 的 shake。不传的话 SDK 把它当主会话，`dispose()` 时会销毁全局 `AgentLifecycleManager`，所有空闲 subagent 变成 `Unknown agent`，无法再续聊。`lang-nag` 几乎每轮都建辅助会话，漏传会让 subagent 很快失联。只调用 `completeSimple` 的扩展（`task-split-check`、`task-completion-judge`）不建会话，不涉及这条。
 - **升级 OMP 后**，在真实 TUI 里重新验证 [fork-task](#fork-task)、[subagent-todo](#subagent-todo) 和 [user-prompt-inject](#user-prompt-inject)，它们依赖 OMP 内部实现（`AgentRegistry`、`ctx.agent`、子会话文件路径、钩子顺序、`context` 事件的调用时机、宿主工具注入、`TodoTool` 读写的会话接口）。
+- **升级 OMP 后**，启动主会话时如果弹出 `system-prompt-replace: … found no target` 警告，就按新的模板文字改 `system-prompt-replace.json`；同时确认 [system-prompt-replace](#system-prompt-replace) 依赖的扩展加载顺序没变。
 - **扩展注入用户消息时写 `attribution: "agent"`。** 不写就默认 `user`，[user-prompt-inject](#user-prompt-inject) 会把它当成用户原话注入 mentor 和 discussant。
 - **改 agent 定义前**读 `agent/agents/README.txt`；目录里的笔记用 `.txt`，不要用 `.md`。

@@ -20,10 +20,14 @@ import { basename, dirname, join, resolve } from "node:path";
 //   - user level:  <agent dir>/PROMPT-INJECT-*.md          (~/.omp/agent by default)
 //   - repo level:  <dir>/PROMPT-INJECT-*.md and <dir>/.omp/PROMPT-INJECT-*.md,
 //                  walking from cwd up to the git root.
-// Frontmatter (between `---` fences):
-//   target:  mentor:default, discuss:steady   # required; agent names or `*` (every subagent)
-//   name:    user-goal                        # optional; defaults to the file label
-//   enabled: true                             # optional; default true
+// Frontmatter (between `---` fences), one `key: value` per line. Only whole-line
+// `#` comments are skipped; text after a value is part of the value.
+//   target:  mentor:default, discuss:steady
+//   name:    user-goal
+//   enabled: true
+// `target` is required (agent names, or `*` for every subagent). `name`
+// defaults to the file label. `enabled` defaults to true; when present, only
+// true/yes/on/1 (case-insensitive, quotes allowed) keep the file enabled.
 // Body = template. `user_prompt` is the root session's user prompts in
 // chronological order (0 = first):
 //   {{user_prompt[0]}}    first prompt;   {{user_prompt[-1]}} latest;
@@ -32,7 +36,9 @@ import { basename, dirname, join, resolve } from "node:path";
 // A scalar out of range renders empty; slice bounds clamp. A slice renders each
 // element as `<user_prompt index="N">…</user_prompt>` (N = 0-based position),
 // one per line block. Any other `{{user_prompt…}}` form makes the file invalid
-// (skipped with a warning). Prompt text is inserted verbatim, never re-expanded.
+// (skipped with a warning). Each prompt is the message's text blocks joined by
+// newlines and trimmed; text-empty messages are dropped and take no index.
+// Prompt text is never re-expanded.
 //
 // SOURCE. The root is found by walking `ctx.agent.parentId` through the
 // process agent registry to the `kind: "main"` ref. Its prompts are the user

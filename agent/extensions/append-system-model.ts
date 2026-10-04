@@ -38,8 +38,10 @@ import { join } from "node:path";
 // `/model` switches apply from the next prompt. A model switched mid-run by
 // auto-retry keeps the blocks chosen when the prompt started.
 //
-// FAILURE POLICY. A malformed file degrades to "no injection" plus one warning
-// per distinct error; the prompt is never blocked.
+// FAILURE POLICY. A missing file injects nothing silently; an unreadable file
+// warns on every prompt. A malformed file degrades to "no injection" plus a
+// warning, repeated only when the error changes or a valid read intervened.
+// The prompt is never blocked.
 // ============================================================================
 
 const FILE_NAME = "APPEND_SYSTEM_MODEL.md";

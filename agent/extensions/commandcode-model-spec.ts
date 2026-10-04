@@ -26,7 +26,8 @@ import { join } from "node:path";
 // when the user selected a commandcode catalog model but the session is not running it as
 // `commandcode-custom`, it re-selects the live commandcode model via the registry. It
 // registers no provider (the plugin stays authoritative for streaming, pricing, auth),
-// never persists the selection or touches the cache, and never reads the auth key.
+// does not change the default model or touch the cache, and never reads the auth key.
+// The re-selection is an ordinary `setModel`, so the session records a `model_change`.
 
 const COMMANDCODE = "commandcode";
 const MODEL_PREFIX = `${COMMANDCODE}/`;

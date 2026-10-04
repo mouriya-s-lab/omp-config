@@ -20,11 +20,12 @@ import type { AgentSession } from '@oh-my-pi/pi-coding-agent/session/agent-sessi
  * and the reason goes back to the subagent, which keeps working. A terminal
  * yield judged DONE while the session's own todo list (see `subagent-todo.ts`)
  * still has pending or in-progress items is blocked once, asking the subagent
- * to bring the todo list up to date before yielding. Once a NOT done verdict
- * has bounced, the next terminal yield always passes. Every yield that passes
- * after a definitive verdict carries it to the parent as
- * `data.completion_judge = { verdict, reason, bounced }`. Later yields in the
- * same session pass unjudged.
+ * to bring the todo list up to date before yielding. Each bounce happens at
+ * most once, so one session can see a NOT done bounce and later a todo
+ * bounce. Every yield that passes after a definitive verdict carries it to
+ * the parent as `data.completion_judge = { verdict, reason, bounced }`, where
+ * `bounced` records only the NOT done bounce. Later yields in the same
+ * session pass unjudged.
  *
  * The verdict is attached only when the yield's `data` is the schema-free open
  * object; a caller `outputSchema` could reject the extra field, so there the
@@ -380,7 +381,7 @@ export default function taskCompletionJudge(pi: ExtensionAPI): void {
             const reason = [
                 '完成度鉴定：对照最初的任务和你最近的 tool call，这次任务还没有真正完成，yield 被退回。',
                 verdict.reason || '(鉴定未给出具体原因)',
-                '补完缺失的部分并实际验证后再 yield。下一次 yield 会直接交付，鉴定结论会一并交给主 agent。',
+                '补完缺失的部分并实际验证后再 yield。之后不会再因完成度退回，鉴定结论会一并交给主 agent。',
             ].join('\n');
             return { block: true, reason };
         }

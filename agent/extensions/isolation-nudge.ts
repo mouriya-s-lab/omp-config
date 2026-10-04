@@ -23,8 +23,10 @@ import { type ExtensionAPI, type ExtensionContext, z } from '@oh-my-pi/pi-coding
 
 /**
  * `task:*` workers and user-tagged model agents (`m1`, `m2`, … — the bundled
- * task template) hold write tools; an omitted `agent` resolves to one of them.
- * `discuss:*` and `mentor:*` are read-only by definition.
+ * task template) hold write tools. An omitted `agent` is counted as a writer
+ * conservatively, without resolving the caller's actual default (for
+ * `task:mid`/`low`/`free` it is the read-only mentor). `discuss:*` and
+ * `mentor:*` are read-only by definition.
  */
 const isWriter = (agent: string | undefined): boolean =>
     agent === undefined || /^task(?::|$)/.test(agent) || /^m\d+$/.test(agent);

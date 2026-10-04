@@ -19,8 +19,9 @@
  * Scope. Main session only, mirroring tool-policy-nag: subagents run
  * short, decomposed slices and do not benefit from a post-compaction
  * ctx dump. Both `session_compact` and `auto_compaction_end` fire per
- * auto-compaction; a small time window dedupes them so the payload is
- * injected once per boundary.
+ * auto-compaction; a 5 s window keyed only on the last attempt dedupes
+ * them. It is not tied to the compaction boundary: a failed attempt still
+ * consumes the window, and two boundaries within 5 s inject once.
  */
 
 import type { ExtensionAPI, ExtensionContext } from '@oh-my-pi/pi-coding-agent';

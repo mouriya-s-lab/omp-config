@@ -1,5 +1,6 @@
 extensions:
   - ~/.claude
+  - ~/.omp/agent/extensions-last/system-prompt-replace.ts
 setupVersion: 2
 dev:
   autoqaConsent: denied

@@ -771,7 +771,7 @@ Saved in \`${SETTINGS_FILE}\`. Use the commands above or edit the file directly.
 
 ## Explanation modes
 
-- brief — main point and next action, roughly 200 words
+- brief — plain, very simple explanation; light on forced analogies
 - balanced — default; material detail with clearer structure
 - faithful — closest to the source, with no fixed word limit
 

@@ -9,7 +9,8 @@ light system prompts, light-mode config and launcher source, custom subagent
 definitions, local TypeScript extensions, the agent-root
 `thinking-translator.json` for `omp-thinking-translator`, the agent-root
 `PROMPT-INJECT-*.md` templates for `user-prompt-inject.ts`, the agent-root
-`APPEND_SYSTEM_MODEL.md` for `append-system-model.ts` (when the machine has one), the `pi-bansos`
+`APPEND_SYSTEM_MODEL.md` for `append-system-model.ts` (when the machine has one), the agent-root
+`system-prompt-replace.json` for `extensions-last/system-prompt-replace.ts`, the `pi-bansos`
 plugin state (`pi/agent/pi-bansos-relay-state.json`), the plugin install
 list, and the maintenance commands that move state between this repo and a
 machine's live `~/.omp/agent` (plus `~/.pi/agent` for the `pi-bansos` state)
@@ -36,16 +37,18 @@ flowchart LR
     Q["agent/PROMPT-INJECT-*.md"]
     G["agent/agents/*.md"]
     E["agent/extensions/*.ts"]
+    EL["agent/extensions-last/*.ts"]
+    R["agent/system-prompt-replace.json"]
     I["install-plugins.sh"]
     B["pi/agent/pi-bansos-relay-state.json"]
   end
   subgraph machine["~/.omp/agent"]
     LA["config.yml / settings.json"]
     LM["APPEND_SYSTEM_MODEL.md"]
-    LT["thinking-translator.json"]
+    LT["thinking-translator.json / system-prompt-replace.json"]
     LQ["PROMPT-INJECT-*.md"]
     LG["agents/"]
-    LE["extensions/"]
+    LE["extensions/ / extensions-last/"]
     LL["config-light.yml / APPEND_SYSTEM_LIGHT.md / omp-light.ts"]
     PL["~/.omp/plugins/"]
   end
@@ -71,15 +74,29 @@ flowchart LR
 - **Extensions are loaded per session** from the paths in `settings.json` /
   `config.yml`; each is a default-exported function that registers tools/commands
   or subscribes to lifecycle events on the `ExtensionAPI` (`pi`).
+- **Load order is hook order.** `before_agent_start` handlers run extension by
+  extension in load order, each receiving the system prompt the previous one
+  returned (not every event is serial: `session_shutdown` handlers run
+  concurrently). Order: native discovery (`~/.omp/agent/extensions/`,
+  `settings.json` `extensions`) → hooks → plugin extensions → `-e` paths →
+  `config.yml` `extensions` in list order → OMP's inline factories
+  (SDK-supplied extensions, autoresearch, the custom-tools wrapper); a path loads
+  once, at its first occurrence. `extensions-last/system-prompt-replace.ts` must
+  therefore stay the last `config.yml` `extensions` entry and outside
+  `extensions/`, which makes it last among path-loaded extensions; inline
+  factories still run after it (autoresearch rewrites the prompt only in
+  autoresearch mode). Within `extensions/` the order is whatever the native
+  `glob` walk returns — no sort, not filename order — so filename prefixes
+  cannot order extensions.
 - **Two one-way syncs, never one "sync".** `/sync-omp-config` never writes the
   machine; its sync range includes the three light assets, the agent-root
-  `thinking-translator.json`, `APPEND_SYSTEM_MODEL.md`, and `PROMPT-INJECT-*.md` templates, and
+  `thinking-translator.json`, `system-prompt-replace.json`, `APPEND_SYSTEM_MODEL.md`, `extensions-last/*.ts`, and `PROMPT-INJECT-*.md` templates, and
   `~/.pi/agent/pi-bansos-relay-state.json`, but excludes installed PATH launchers.
   `/update-omp` writes the machine and installs `omp-light` beside the resolved
   `omp` executable (`.omp/commands/*.md`).
 - **Structured configs are managed in both directions, field by field.**
-  `config.yml`, `settings.json`, the agent-root `thinking-translator.json`,
-  `extensions/lang-nag.json`, `extensions/input-polish.json`, and `pi-bansos-relay-state.json` are regular items
+  `config.yml`, `settings.json`, the agent-root `thinking-translator.json` and
+  `system-prompt-replace.json`, `extensions/lang-nag.json`, `extensions/input-polish.json`, and `pi-bansos-relay-state.json` are regular items
   of both commands: each side reads
   both files, diffs fields, and edits only the differing lines — never a
   whole-file overwrite or re-serialization. `config.yml`'s machine-local fields
@@ -96,7 +113,9 @@ flowchart LR
 | Path | Purpose |
 | --- | --- |
 | `agent/` | Managed harness config. Only listed items are portable; the whole dir is **not**. |
-| `agent/extensions/` | Local TypeScript extensions (the code core). 22 `.ts` (incl. `bro.ts`, the built-in-AI rewrite of the former `pi-bro` plugin, `input-polish.ts`, which polishes the input-box draft on the configured chord (default Ctrl+Enter) and shows the result in an overlay over the input box, where Enter sends it and Esc discards it, `watchdog-agent.ts`, `user-prompt-inject.ts`, which renders the root session's user prompts into `PROMPT-INJECT-*.md` templates and prepends them, request-only, to every model call of the targeted subagents (mentor and discussants by default), `append-system-model.ts`, which appends the `APPEND_SYSTEM_MODEL.md` blocks whose `model`/`provider` regexes match the session's model to the system prompt on every `before_agent_start`, `fork-task.ts`, which seeds native `task` children with a copy of the caller's conversation, `task-split-check.ts`, which blocks main-agent `task` calls whose items cover more than one topic, and any `task`/`fork_task` call that caps a `task:*` worker's report length, `subagent-todo.ts`, which gives each `task:*` worker its own native `todo` tool that OMP strips from subagents, and `task-completion-judge.ts`, which bounces a `task:low`/`task:mid`/`task:free` worker's first final `yield` once when a model judges the slice unfinished, and once more when it is finished but the worker's todo list still has open items) + `doc-polish.json`/`input-polish.json`/`lang-nag.json` sidecars (`input-polish.json` and `lang-nag.json` are synced both ways; `doc-polish.json` is machine-local/prompt-overridable — see Important Files). |
+| `agent/extensions/` | Local TypeScript extensions (the code core). 20 `.ts` (incl. `bro.ts`, the built-in-AI rewrite of the former `pi-bro` plugin, `input-polish.ts`, which polishes the input-box draft on the configured chord (default Ctrl+Enter) and shows the result in an overlay over the input box, where Enter sends it and Esc discards it, `watchdog-agent.ts`, `user-prompt-inject.ts`, which renders the root session's user prompts into `PROMPT-INJECT-*.md` templates and prepends them, request-only, to every model call of the targeted subagents (mentor and discussants by default), `append-system-model.ts`, which appends the `APPEND_SYSTEM_MODEL.md` blocks whose `model`/`provider` regexes match the session's model to the system prompt on every `before_agent_start`, `fork-task.ts`, which seeds native `task` children with a copy of the caller's conversation, `task-split-check.ts`, which blocks main-agent `task` items for `task:low`/`task:mid`/`task:free` that cover more than one topic, and any `task`/`fork_task` call that caps a `task:*` worker's report length, `subagent-todo.ts`, which gives each `task:*` worker its own native `todo` tool that OMP strips from subagents, and `task-completion-judge.ts`, which bounces a `task:low`/`task:mid`/`task:free` worker's first final `yield` once when a model judges the slice unfinished, and once more when it is finished but the worker's todo list still has open items) + `doc-polish.json`/`input-polish.json`/`lang-nag.json` sidecars (`input-polish.json` and `lang-nag.json` are synced both ways; `doc-polish.json` is machine-local/prompt-overridable — see Important Files). |
+| `agent/extensions-last/` | Extensions that must run after every other path-loaded extension, loaded by path as the last `config.yml` `extensions` entry (`~/.omp/agent/extensions-last/system-prompt-replace.ts`); `README.md` there documents load order and is repo-only. Holds `system-prompt-replace.ts`, which applies the `system-prompt-replace.json` rules (`literal` or `regex` + `replace`) to the system prompt on every `before_agent_start`, main session and subagents; it rewrites built-in tool descriptions that conflict with `APPEND_SYSTEM.md`. Excluded in light mode by `config-light.yml`'s `extensions` override. `*.ts` there are synced both ways like `extensions/*.ts`. |
+| `agent/system-prompt-replace.json` | Agent-root replacement rules for `system-prompt-replace.ts`. Portable regular item in both directions (field-level diff and edit; validate with `JSON.parse`). Read per prompt, so edits apply without restart; a rule whose target is absent from the main session's system prompt raises a visible warning (UI notification, or stderr when headless) once per rule per process. |
 | `agent/agents/` | Custom subagent definitions (`*.md`) + `README.txt` authoring pitfalls. |
 | `agent/thinking-translator.json` | Agent-root translator config for `omp-thinking-translator`. Portable regular item: `/sync-omp-config` carries machine → repo, `/update-omp` carries repo → machine. |
 | `agent/PROMPT-INJECT-*.md` | Agent-root templates for `user-prompt-inject.ts` (frontmatter `target`/`name`/`enabled`, body with `{{user_prompt[i]}}` / `{{user_prompt[a:e]}}`). Portable regular files in both directions, copied whole; `/update-omp` does not delete extra live templates. |
@@ -141,7 +160,7 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
   default export is a camelCase function matching the filename (`ctxTool`,
   `toolPolicyNag`).
 - **Authoring shape:** default-exported `(pi: ExtensionAPI) => void` that
-  registers and/or subscribes; example (`agent/extensions/ctx-tool.ts:1517-1546`):
+  registers and/or subscribes; example (`agent/extensions/ctx-tool.ts:1668-1707`):
   ```ts
   export default function ctxTool(pi: ExtensionAPI): void {
     pi.registerTool({
@@ -159,7 +178,7 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
 - **Two idioms:** tool/command registration (`pi.registerTool`,
   `pi.registerCommand`, `pi.setLabel`) vs pure hooks (`pi.on(event, handler)`).
   Hook-only extensions register nothing (e.g. `repo-rules.ts`,
-  `tool-policy-nag.ts`, `commandcode-model-spec.ts`, `user-prompt-inject.ts`).
+  `tool-policy-nag.ts`, `user-prompt-inject.ts`).
 - **Lifecycle events used:** `session_start`, `before_agent_start`, `input`,
   `context`, `tool_call`, `tool_result`, `message_end`, `session_compact`,
   `auto_compaction_end`, `before_subagent_spawn`, `session_shutdown`,
@@ -186,19 +205,17 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
   `dispose()` tears down the global `AgentLifecycleManager`, releasing every
   idle subagent (they become `Unknown agent` and can no longer be messaged).
 - **Error handling:** hooks/tools are defensive — scan/read/glob failures degrade
-  to empty/none or warnings rather than throwing (`ctx-tool.ts:442-457`,
+  to empty/none or warnings rather than throwing (`ctx-tool.ts:454-470`,
   `ctx-tasklog.ts:239-267`). Model/provider request failures in `doc-polish.ts`
-  retry 3× then surface a structured `DocPolishRuntimeError` without leaking
-  secrets (`doc-polish.ts:279-300`).
+  retry 3× then surface a structured `DocPolishRuntimeError` that carries the
+  provider's raw error text (`doc-polish.ts:285-303`); nothing redacts it.
 - **State:** kept in the extension closure or module-level caches; durable state
   goes through session custom entries (e.g. `tool-policy-nag.ts` persists
-  `mouriya.omp.tool-policy-nag.state` and rebuilds it on restore).
+  `mouriya.omp.tool-policy-nag.state` and rebuilds it on restore) or, for
+  `ctx-tasklog.ts`, append-only files under the local root
+  (`task-log/<agent-id>.md`).
 - **Schemas:** validate untrusted input at boundaries — imported `z` for internal
   schemas, `pi.zod` for registered tool parameter schemas.
-- **Process-wide patches are idempotent + un-removable:**
-  `xai-oauth-cost-ticks.ts` wraps `globalThis.fetch` and `v2-compaction-timeout.ts`
-  rewrites `AbortSignal.timeout(180000)→600000`, both guarded by `Symbol.for`
-  marks. Do not add a second wrapper or broaden the match.
 - **Style is not uniform** (tabs/double-quotes vs spaces/single-quotes across
   files) and there is no formatter. Preserve each file's local style; never
   restyle as part of a change.
@@ -224,7 +241,8 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
 
 ## Important Files
 
-- `agent/config.yml` — harness + UI config. Key sections: `extensions: [~/.claude]`,
+- `agent/config.yml` — harness + UI config. Key sections: `extensions` (`~/.claude`, then
+  `~/.omp/agent/extensions-last/system-prompt-replace.ts`, which must stay last),
   `task.agentModelOverrides` (model/fallback chains per tier),
   `task.disabledAgents`, `compaction.methodOrder` (`compaction.thresholdTokens` is machine-local),
   feature toggles (`astGrep.enabled: true`, `github.enabled: true`,
@@ -232,13 +250,21 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
 - `agent/settings.json` — minimal legacy extension path: `{"extensions": ["~/.claude"]}`.
 - `agent/APPEND_SYSTEM.md` — global system-prompt appendix (user-instruction precedence, orchestration stance,
   no-token-saving rule, design-document read-in-full rule, spawn briefing, agent chat and lifecycle,
-  `task` vs `fork_task`, agent tiers, shared-checkout vs `isolated: true` rules,
-  tool policy). Task children
-  never receive it, so rules they need are repeated in the `task:*` definitions.
+  agent tiers, shared-checkout vs `isolated: true` rules, tool policy). Task children
+  never receive it, so rules they need are repeated in the `task:*` definitions. Rules about
+  how to use one tool (`todo` timing and revision, explicit `agent`, per-spawn `model`/`effort`,
+  `task` vs `fork_task`) live in that tool's description instead — built-in ones rewritten by
+  `system-prompt-replace.json`, `fork_task`'s in `fork-task.ts` — so subagents see them too;
+  this relies on `config.yml` `inlineToolDescriptors: "on"`, which renders every tool
+  description into the system prompt.
 - `agent/config-light.yml` — declarative light-mode config overlay: disables twelve
   optional behavior extensions (including `task-completion-judge` and
-  `user-prompt-inject`); the other ten (`append-system-model`, `bro`, `input-polish`, `repo-rules`,
-  `subagent-todo`, and five compatibility fixes) stay loaded, as listed in `README.md`.
+  `user-prompt-inject`); the other eight (`append-system-model`, `bro`, `input-polish`, `repo-rules`,
+  `subagent-todo`, and three compatibility fixes) stay loaded, as listed in `README.md`.
+  It overrides `extensions` to `[~/.claude]` to drop `system-prompt-replace.ts`:
+  `disabledExtensions` only filters discovered `extension-module:<name>` entries,
+  never `config.yml` path entries. Re-check this override whenever `config.yml`
+  `extensions` changes.
 - `agent/APPEND_SYSTEM_LIGHT.md` — system-prompt appendix used only by
   `omp-light` (currently empty); the normal `APPEND_SYSTEM.md` remains the full-mode prompt.
 - `agent/omp-light.ts` — portable `#!/usr/bin/env bun` launcher source. `/update-omp`
@@ -285,15 +311,20 @@ Direct-migration copy set (never copy the whole `agent/`; `README.md`):
 ```bash
 mkdir -p "$HOME/.omp/agent"
 cp agent/config.yml agent/settings.json agent/APPEND_SYSTEM.md \
-  agent/thinking-translator.json agent/PROMPT-INJECT-*.md \
+  agent/thinking-translator.json agent/system-prompt-replace.json agent/PROMPT-INJECT-*.md \
   agent/config-light.yml agent/APPEND_SYSTEM_LIGHT.md agent/omp-light.ts \
   "$HOME/.omp/agent/"
-cp -a agent/agents agent/extensions "$HOME/.omp/agent/"
+cp -a agent/agents agent/extensions agent/extensions-last "$HOME/.omp/agent/"
 [ -f agent/APPEND_SYSTEM_MODEL.md ] && cp agent/APPEND_SYSTEM_MODEL.md "$HOME/.omp/agent/"
 mkdir -p "$HOME/.pi/agent"
 cp pi/agent/pi-bansos-relay-state.json "$HOME/.pi/agent/"
+./install-plugins.sh
 ```
 
+The copy set overwrites whole files: the target's machine-local `config.yml`
+fields (e.g. `compaction.thresholdTokens`) and `extensions/doc-polish.json` are
+replaced, and the repo-only `extensions-last/README.md` comes along; on a
+machine with existing config use `/update-omp` or restore those afterwards.
 The installed `omp-light` / `omp-light.cmd` entries are generated outputs, not
 copy-set files. Direct migration must also run `/update-omp` on the target, or
 perform the same installation beside the resolved `omp` on `PATH`; copying the
@@ -303,8 +334,9 @@ three light assets alone does not make `omp-light` resolvable.
 
 - **Harness/runtime is Bun-based** (`omp`). Extensions run under it; validation
   one-liners use `bun -e` (e.g. `Bun.YAML.parse`, `JSON.parse`). Most extensions
-  use Node built-ins + Web APIs; only `unified-exec-bun-pty.ts` is Bun-specific,
-  and it is gated to `darwin` + `arm64` for `pi-unified-exec` PTY support.
+  use Node built-ins + Web APIs; Bun-specific code is `unified-exec-bun-pty.ts`
+  (gated to `darwin` + `arm64` for `pi-unified-exec` PTY support) and
+  `append-system-model.ts`, which parses headers with `Bun.YAML.parse`.
 - **Plugins:** installed with `omp install` (network) into `~/.omp/plugins/`
   (`package.json`, `bun.lock`, `node_modules/`, `omp-plugins.lock.json`). These are
   machine state, not repo content.
@@ -312,11 +344,14 @@ three light assets alone does not make `omp-light` resolvable.
 - The installed `omp-light` entry is not stored in `~/.omp/agent`: it is
   placed beside the resolved `omp` executable so the existing `PATH` finds it.
 - **Restart required:** `APPEND_SYSTEM.md`, extensions, and plugins take effect on
-  the next `omp` start (`.omp/commands/update-omp.md:57`); agent `*.md` edits
+  the next `omp` start (`.omp/commands/update-omp.md:70`); agent `*.md` edits
   apply on next spawn without restart.
-- **Never commit** (per `.gitignore`): `agent/*.db*`, `*.lock`, `config.yml.lock`,
-  `models.yml*`, `commandcode-models.json`, `sessions/`, `terminal-sessions/`,
-  `blobs/`, `cache/`, `plugins/node_modules/`, logs, and anything credential-bearing.
+- **Never commit** (`.gitignore` covers `agent/{agent,history,models}.db*`,
+  `agent/*.lock`, `agent/models.yml` and `models.yml.bak-*`,
+  `agent/commandcode-models.json`, `agent/last-changelog-version`,
+  `agent/{sessions,terminal-sessions,blobs,cache}/`, `plugins/node_modules/`,
+  `**/*.db`, `**/*.db-*`, `**/logs/`): runtime state and anything
+  credential-bearing, including files the patterns miss.
 - **Do not overwrite app-managed files:** files marked
   `// @orca-managed-pi-extension` or `marker: _otty` (e.g. `orca-*.ts`,
   `otty-integration.ts`) are maintained by their apps — presence of the marker,
@@ -330,7 +365,7 @@ three light assets alone does not make `omp-light` resolvable.
 - **`plugin-audit.sh` validates the plugin *list*, not extension code** — it
   cannot prove anything about a `.ts` edit.
 - **How to validate a change here:**
-  1. `bun -e` parse check for any changed YAML/JSON (`config.yml`, `*.json`) — including `agent/thinking-translator.json` and `pi/agent/pi-bansos-relay-state.json` via `JSON.parse` on both sync and update paths.
+  1. `bun -e` parse check for any changed YAML/JSON (`config.yml`, `*.json`) — including `agent/thinking-translator.json`, `agent/system-prompt-replace.json`, and `pi/agent/pi-bansos-relay-state.json` via `JSON.parse` on both sync and update paths.
   2. For an extension change, the only real proof is runtime: apply via
      `/update-omp` (or the `cp` set), **restart `omp`**, and exercise the actual
      tool/command/hook (e.g. run `ctx list`, `/polish-doc <file>`, trigger the

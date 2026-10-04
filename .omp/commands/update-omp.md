@@ -20,8 +20,10 @@ description: 用本仓库快照更新本机 OMP 配置和 pi-bansos 状态（rep
 | `agent/APPEND_SYSTEM_MODEL.md` | 同名 | 直接覆盖；仓库没有时不动本机 |
 | `agent/PROMPT-INJECT-*.md` | 同名 | 直接覆盖；本机多出来的模板不删 |
 | `agent/thinking-translator.json` | 同名 | 只改有差异的字段 |
+| `agent/system-prompt-replace.json` | 同名 | 本机已有时只改有差异的字段；缺失时复制 |
 | `agent/agents/` | `agents/` | `diff -rq` 确认范围后覆盖 |
 | `agent/extensions/*.ts` | `extensions/` | 同名覆盖、缺的补齐，见「扩展」 |
+| `agent/extensions-last/*.ts` | `extensions-last/` | 同名覆盖、缺的补齐，见「扩展」 |
 | `agent/extensions/lang-nag.json` | 同名 | 只改有差异的字段 |
 | `agent/extensions/input-polish.json` | 同名 | 只改有差异的字段 |
 | `agent/config-light.yml`、`agent/APPEND_SYSTEM_LIGHT.md`、`agent/omp-light.ts` | 同名 | 三件整体更新并安装入口，见「Light 启动器」 |
@@ -35,6 +37,7 @@ agent 定义和 `config.yml` 里的模型绑定必须一起更新；只更新一
 ## 扩展
 
 - 不删除本机多出来的扩展；仓库删掉的扩展也不在本机卸载。
+- `extensions-last/` 里的扩展由 `config.yml` 的 `extensions` 按路径加载，必须是列表最后一项；不要放进 `extensions/`，否则会被提前加载。
 - 应用托管的文件跳过、不覆盖：首行为 `// @orca-managed-pi-extension`，或任意行含 `marker: _otty`。以标记为准，不凭文件名判断。
 - 本机相关的初始化项（`doc-polish.json`、`unified-exec-bun-pty.ts` 需要的 PTY 原生包缓存、`commandcode-model-spec.ts` 依赖的 `commandcode-models.json`）已存在就不动；缺失时问用户是否创建、内容填什么，未确认就跳过并在报告里说明。
 
@@ -62,6 +65,6 @@ agent 定义和 `config.yml` 里的模型绑定必须一起更新；只更新一
 ## 校验与报告
 
 - 复制的文件与仓库 `cmp` 一致；编辑过的结构化配置，除本机字段外与仓库逐字段一致；安装入口检查内容、权限和解析路径。
-- 动过的 YAML/JSON 两端都要能解析：`config.yml`、`config-light.yml` 用 `Bun.YAML.parse`，`settings.json`、`thinking-translator.json`、`lang-nag.json`、`input-polish.json`、`pi-bansos-relay-state.json` 用 `JSON.parse`。
+- 动过的 YAML/JSON 两端都要能解析：`config.yml`、`config-light.yml` 用 `Bun.YAML.parse`，`settings.json`、`thinking-translator.json`、`system-prompt-replace.json`、`lang-nag.json`、`input-polish.json`、`pi-bansos-relay-state.json` 用 `JSON.parse`。
 - 不打印凭据，不把明文凭据写进本机。
-- 报告改了哪些文件、装卸了哪些插件、哪些项因等待确认被跳过，并提醒重启 OMP：APPEND_SYSTEM、扩展、插件在下次启动时加载；`APPEND_SYSTEM_MODEL.md` 从下一条 prompt 开始生效；`PROMPT-INJECT-*.md` 从下一个派出的 subagent 开始生效；`pi-bansos-relay-state.json` 在已运行的会话里要到下次会话启动或下一次 `/bansos` 改动时才生效。
+- 报告改了哪些文件、装卸了哪些插件、哪些项因等待确认被跳过，并提醒重启 OMP：APPEND_SYSTEM、扩展、插件在下次启动时加载；`APPEND_SYSTEM_MODEL.md`、`system-prompt-replace.json` 从下一条 prompt 开始生效；`PROMPT-INJECT-*.md` 从下一个派出的 subagent 开始生效；`pi-bansos-relay-state.json` 在已运行的会话里要到下次会话启动或下一次 `/bansos` 改动时才生效。

@@ -356,7 +356,7 @@ export default function langNag(pi: ExtensionAPI): void {
 	});
 }
 
-// Pure-logic seam for out-of-harness verification (mirrors xai-oauth-cost-ticks).
+// Pure-logic seam for out-of-harness verification.
 // The model-calling path (isTargetLanguage/detectInstruction) still requires a
 // live session and is not exposed here.
 export function __testables() {

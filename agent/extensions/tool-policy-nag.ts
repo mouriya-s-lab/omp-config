@@ -4,8 +4,9 @@ import type { ExtensionAPI, ExtensionContext } from '@oh-my-pi/pi-coding-agent';
  * Watches for shell commands that reimplement the built-in tools APPEND_SYSTEM.md
  * assigns to the model: list, read, search, edit, write and eval operations.
  * Ignoring the system prompt is one failure: after the first three hits, send at
- * most three generic steer nags per context, then go quiet until the context is
- * replaced (compaction, /clear, branch or tree navigation).
+ * most three generic steer nags per context, then go quiet until a boundary that
+ * replaces the context (compaction, /clear, branch summary). Branch or tree
+ * navigation rebuilds the target branch's own state; it does not reset it.
  */
 
 const NAG_TEXT = '你为什么不遵守system prompt。';

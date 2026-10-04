@@ -28,9 +28,9 @@ import { isKeyRelease, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAn
 //
 // Polishing uses a dedicated in-memory `createAgentSession` (lang-nag's shape):
 // configured model (thinking per its `:effort` suffix, off by default), NO tools, empty system prompt, no MCP/LSP/
-// extensions. Config lives in `input-polish.json`, resolved from the caller's
-// cwd first, then next to this file. Missing/malformed config leaves the
-// extension inert. Main interactive session only.
+// extensions. Config lives in `input-polish.json`: the caller's cwd copy first,
+// then the one next to this file; a missing or malformed candidate falls
+// through to the next, and only when neither is valid is the extension inert.
 //
 // Drafts that start with `/`, `!` or `$` (slash command, bash, python) and empty
 // drafts are not polished: the chord falls through to the host untouched.

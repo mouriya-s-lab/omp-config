@@ -27,8 +27,8 @@ import { basename, extname, isAbsolute, join, resolve as resolvePath } from "nod
 //                      the file itself and writes a JSON split index (blocks
 //                      with original line ranges + full keyword glossary).
 //                      Everything after the split is program behavior.
-//   2. Polish agent  — no tools. Receives batched blocks (<=5000 code points,
-//                      never truncated) plus only the glossary terms relevant
+//   2. Polish agent  — no tools. Receives batched blocks (<=5000 code points;
+//                      a longer block goes alone, never truncated) plus only the glossary terms relevant
 //                      to the batch; returns polished blocks + keyword-change
 //                      records. Its text output is captured by the program.
 //   3. Check agent   — no tools. Per regrouped block, judges whether the
@@ -146,14 +146,15 @@ function findInRegistry(ctx: ExtensionContext, base: string): Model | undefined 
 }
 
 // Accepts a `provider/model:effort` spec, or a comma-separated fallback chain;
-// returns the first candidate that resolves to an available model.
-function resolveModelSpec(ctx: ExtensionContext, spec: string): ResolvedModel {
+// returns the first candidate that resolves to an available model, or undefined.
+// Existence check only — resolves against the model registry, never sends a request.
+function resolveModelSpec(ctx: ExtensionContext, spec: string): ResolvedModel | undefined {
 	for (const candidate of spec.split(",").map(s => s.trim()).filter(Boolean)) {
 		const { base, effort } = splitEffort(candidate);
 		const model = ctx.models?.resolve?.(base) ?? findInRegistry(ctx, base);
 		if (model) return { model, thinkingLevel: effort, spec: candidate };
 	}
-	throw new Error(`doc-polish: no available model resolved for "${spec}"`);
+	return undefined;
 }
 
 function defaultModelSpec(ctx: ExtensionContext): string {
@@ -164,40 +165,35 @@ function defaultModelSpec(ctx: ExtensionContext): string {
 	throw new Error("doc-polish: no model available to run sub-agents");
 }
 
-// Raised when `doc-polish.json` names a model absent from the model list. Both entry
-// points convert it into an agent-facing message rather than a hard failure.
-class DocPolishConfigError extends Error {}
+// Raised before any work when a model this call would use is absent from the
+// model list. Both entry points surface it as an error.
+class DocPolishModelError extends Error {}
 
 // Raised when a sub-agent request keeps failing at runtime after retries. Surfaced
-// as a readable, self-contained error — distinct from the pre-run config gate.
+// as a readable, self-contained error — distinct from the pre-run model check.
 class DocPolishRuntimeError extends Error {}
 
-// Existence check only — resolves against the model registry, never sends a request.
-// A comma fallback chain counts as present when any candidate resolves.
-function modelExists(ctx: ExtensionContext, spec: string): boolean {
-	return spec
-		.split(",")
-		.map(s => s.trim())
-		.filter(Boolean)
-		.some(candidate => {
-			const { base } = splitEffort(candidate);
-			return (ctx.models?.resolve?.(base) ?? findInRegistry(ctx, base)) !== undefined;
-		});
+type ModelRole = "splitModel" | "polishModel" | "checkModel";
+type ModelSource = "调用参数" | "doc-polish.json" | "当前会话模型";
+
+interface ModelChoice {
+	readonly role: ModelRole;
+	readonly spec: string;
+	readonly source: ModelSource;
 }
 
-function configModelIssueMessage(invalid: { role: string; spec: string }[]): string {
-	const list = invalid.map(i => `- \`${i.role}\`: \`${i.spec}\``).join("\n");
+function missingModelMessage(missing: readonly ModelChoice[]): string {
+	const list = missing.map(m => `- \`${m.role}\`: \`${m.spec}\`（来自${m.source}）`).join("\n");
 	return [
-		"doc-polish 本次调用直接中止、未做任何润色（不是挂起，没有可恢复的状态；修正后需重新调用）：配置文件 `doc-polish.json` 里的这些模型不在当前可用模型列表中",
-		"（仅核对模型列表是否存在，未发送任何测试请求）：",
+		"doc-polish 调用失败，未做任何处理（没有拆分、润色或写文件）：这次调用要用的这些模型不在当前可用模型列表中（只核对列表，未发送请求）：",
 		list,
 		"",
-		"请先向用户解释这三个模型设置各自的作用，再把决定权交给用户，不要自行替换或猜测：",
+		"三个模型的作用：",
 		"- `splitModel`（拆分）：读取文档、按相关性切成小块、标注每块在原文的起止行号、抽取关键词词表；需要 read+write 工具能力。",
 		"- `polishModel`（润色）：在不改变原意的前提下，把每个批次重排/润色成工程师更易读的文本，并给出词表变更；无工具。",
 		"- `checkModel`（校验）：对合并后的每个编组判断语义是否保持、如何理解；无工具。未设置时回退到 `splitModel`。",
 		"",
-		"把选择权交给用户：可改用某个可用模型、修改 `doc-polish.json`、或调用时显式传入模型参数；用户确认后再重试（`omp models` 可查看可用模型）。",
+		"改 `doc-polish.json` 或在调用时传入可用模型后重新调用（`omp models` 可查看可用模型）。",
 	].join("\n");
 }
 
@@ -704,23 +700,40 @@ async function polishDocuments(
 	progress: Progress,
 ): Promise<{ source: string; review: string }[]> {
 	const config = loadConfig(ctx.cwd);
-	const invalidConfigModels = (
-		[
-			["splitModel", config.splitModel],
-			["polishModel", config.polishModel],
-			["checkModel", config.checkModel],
-		] as const
-	)
-		.filter(([, spec]) => spec !== undefined && !modelExists(ctx, spec))
-		.map(([role, spec]) => ({ role, spec: spec as string }));
-	if (invalidConfigModels.length > 0) throw new DocPolishConfigError(configModelIssueMessage(invalidConfigModels));
-	const fallback = defaultModelSpec(ctx);
-	const splitSpec = options.splitModel ?? config.splitModel;
-	const models = {
-		split: resolveModelSpec(ctx, splitSpec ?? fallback),
-		polish: resolveModelSpec(ctx, options.polishModel ?? config.polishModel ?? fallback),
-		check: resolveModelSpec(ctx, options.checkModel ?? config.checkModel ?? splitSpec ?? fallback),
+	// The model each role will actually use: call parameter > doc-polish.json >
+	// current session model (checkModel falls back to splitModel's choice).
+	const choose = (role: ModelRole, explicit: string | undefined, configured: string | undefined): ModelChoice | undefined => {
+		if (explicit !== undefined) return { role, spec: explicit, source: "调用参数" };
+		if (configured !== undefined) return { role, spec: configured, source: "doc-polish.json" };
+		return undefined;
 	};
+	const split: ModelChoice = choose("splitModel", options.splitModel, config.splitModel) ?? {
+		role: "splitModel",
+		spec: defaultModelSpec(ctx),
+		source: "当前会话模型",
+	};
+	const polish: ModelChoice = choose("polishModel", options.polishModel, config.polishModel) ?? {
+		role: "polishModel",
+		spec: defaultModelSpec(ctx),
+		source: "当前会话模型",
+	};
+	const check: ModelChoice = choose("checkModel", options.checkModel, config.checkModel) ?? { ...split, role: "checkModel" };
+	const splitModel = resolveModelSpec(ctx, split.spec);
+	const polishModel = resolveModelSpec(ctx, polish.spec);
+	const checkModel = resolveModelSpec(ctx, check.spec);
+	if (!splitModel || !polishModel || !checkModel) {
+		const missing = (
+			[
+				[split, splitModel],
+				[polish, polishModel],
+				[check, checkModel],
+			] as const
+		)
+			.filter(([, model]) => model === undefined)
+			.map(([choice]) => choice);
+		throw new DocPolishModelError(missingModelMessage(missing));
+	}
+	const models = { split: splitModel, polish: polishModel, check: checkModel };
 	const concurrency = options.concurrency ?? config.concurrency ?? DEFAULT_CONCURRENCY;
 	const results: { source: string; review: string }[] = [];
 	for (const p of options.paths) {
@@ -804,8 +817,8 @@ export default function docPolish(pi: ExtensionAPI): void {
 					details: { results, reviewPaths: results.map(r => r.review), reference: true },
 				};
 			} catch (err) {
-				if (err instanceof DocPolishConfigError) {
-					return { content: [{ type: "text", text: err.message }], details: { configError: true } };
+				if (err instanceof DocPolishModelError) {
+					return { content: [{ type: "text", text: err.message }], details: { modelError: true }, isError: true };
 				}
 				if (err instanceof DocPolishRuntimeError) {
 					return { content: [{ type: "text", text: err.message }], details: { runtimeError: true }, isError: true };
@@ -835,9 +848,7 @@ export default function docPolish(pi: ExtensionAPI): void {
 				// reference), rather than displaying it to the human.
 				void pi.sendUserMessage(buildAgentResultText(results), { attribution: "agent" });
 			} catch (err) {
-				if (err instanceof DocPolishConfigError) {
-					void pi.sendUserMessage(err.message, { attribution: "agent" });
-				} else if (err instanceof DocPolishRuntimeError) {
+				if (err instanceof DocPolishModelError || err instanceof DocPolishRuntimeError) {
 					ctx.ui.notify(err.message, "error");
 				} else {
 					ctx.ui.notify(`doc-polish 失败：${String(err)}`, "error");

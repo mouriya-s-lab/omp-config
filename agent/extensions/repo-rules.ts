@@ -10,9 +10,10 @@
  * `.claude/rules`, `.agents/rules` and `.pi/rules` from the cwd up to the
  * repository root and appends what it finds to the system prompt.
  *
- * Anything already present in the system prompt (native always-apply rules,
- * a user-level copy of the same file, a second brand directory holding the
- * same text) is skipped, so nothing is injected twice.
+ * A rule body already present in the incoming system prompt (native
+ * always-apply rules, a user-level copy of the same file) is skipped, and a
+ * catalog entry is dropped when the prompt already has `rule://<name>`. Two
+ * scanned files with different names but identical bodies are both injected.
  */
 
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";

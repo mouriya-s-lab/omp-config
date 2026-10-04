@@ -1,0 +1,24 @@
+{
+  "replacements": [
+    {
+      "regex": "Omit `agent` only for default \\(`[^`]*`\\); NEVER specify it\\.",
+      "replace": "Always set `agent` explicitly; never rely on the default."
+    },
+    {
+      "literal": "User-reported errors, failures, observations are ground truth; NEVER rerun checks to confirm them.",
+      "replace": "User-reported errors, failures, observations are ground truth; NEVER rerun checks to doubt them. Reproducing to locate the cause and confirming the fix still apply."
+    },
+    {
+      "literal": "Compiled code: NEVER avoidable allocation, copying, computation.",
+      "replace": "Compiled code: NEVER add avoidable allocation, copying, computation."
+    },
+    {
+      "literal": "Before work, init for 3+ steps, requested task sets, or new instructions.",
+      "replace": "Before touching anything, init for any multi-step work, requested task sets, or new instructions; every change is logged per context and read back through `ctx`. The list tracks the current scope, not the first plan: the moment the work changes — new or revised instructions, a changed plan, findings that add or remove steps — update it (append, rm/drop, or re-init)."
+    },
+    {
+      "literal": "Omit unless a specific model is needed.",
+      "replace": "Omit unless the user explicitly asks for a specific model."
+    }
+  ]
+}
