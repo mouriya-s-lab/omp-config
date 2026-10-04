@@ -348,7 +348,7 @@ harness 会把 `APPEND_SYSTEM.md` 和每个 agent 的 `description` 都注入主
 
 `watchdog-agent.ts` 是按目标投放的 watchdog，由 `WATCHDOG-<标签>.md` 文件驱动。原生 advisor 发现的 `WATCHDOG.md` / `WATCHDOG.yml` 会推给所有被顾问的会话，没法只投给某个目标，ExtensionAPI 也没有能介入的钩子，所以本扩展自带运行路径，不接管原生 `WATCHDOG.md`。
 
-**文件位置。** 放在 agent 目录（默认 `~/.omp/agent`，设置了 `PI_CODING_AGENT_DIR` 时用它）下的 `WATCHDOG-*.md`，或从 cwd 往上每一层的 `<dir>/WATCHDOG-*.md`、`<dir>/.omp/WATCHDOG-*.md`；往上走到 git root 为止，没有 git root 时走到 home 或文件系统根。文件名不区分大小写。每个文件是一个独立的 watchdog，可以同时有多个，各自计数、各自运行、各自去重和封顶。
+**文件位置。** 放在 agent 目录（默认 `~/.omp/agent`，设置了 `PI_CODING_AGENT_DIR` 时用它）下的 `WATCHDOG-*.md`，或从 cwd 往上每一层的 `<dir>/WATCHDOG-*.md`、`<dir>/.omp/WATCHDOG-*.md`；往上走到 git root 为止，没有 git root 时走到 home 或文件系统根。文件名不区分大小写。每个文件是一个独立的 watchdog，可以同时有多个，各自计数、各自运行、各自封顶。
 
 **frontmatter 字段：**
 
@@ -407,22 +407,54 @@ option.blocker.delivery: steer
 
 - **计数**：每条 assistant 消息结束时累加该 watchdog 的计数。达到 `every` 就立即运行，不等本轮结束；运行期间 agent 照常工作。
 - **补跑**：本轮结束（`agent_end` 且不是 `willContinue`）时计数没到 `every` 但大于 0，就补跑一次；该 watchdog 正在运行时，等它跑完再补跑。
-- **transcript**：按 `scope` 取，`full` 为整条分支，`window` 为上次运行之后的消息。包含用户、assistant、工具调用与结果的文字，不截断，不含自己注入的 `<watchdog>` 消息。
-- **注入**：聊天 reviewer 不通过，或 Jev 选中带 prompt 的选项时，运行一结束就以 `<watchdog name=… severity=…>` 注入匹配的会话，时机按 `delivery`：`aside` 在运行中插到下一个 step 边界、空闲时开启新一轮；`steer` 打断当前运行；`followUp` 排到当前运行之后；`nextTurn` 等用户下一次提问。
-- **识别会话**：主会话按文件名 `<时间戳>_<uuid>.jsonl` 识别，subagent 从 `session_init.agent` 读名字。
-- **去重与封顶**：每个 watchdog 按提醒文本去重；设置了 `maxPerContext` 时按它封顶，封顶后到下次压缩前不再运行审阅。去重记录和封顶计数只在内存里，每次压缩（手动或自动）后清零，所以 Jev 同一选项的 prompt 每个 watchdog 在两次压缩之间最多发一次。压缩不影响累计的操作条数、`window` 游标和正在进行的判定。会话启动或恢复、`session_switch`、分支切换和树跳转会重置全部计数、游标、去重和封顶，并丢弃还没返回的判定；只有 `/watchdog` 的会话覆盖随分支持久化。
-- **失败**：任何失败都不提醒，也不阻塞主轮次。subagent 上的注入是尽力而为，只有执行器收走结果前会话被重新打开才生效。
+- **transcript**：按 `scope` 取，`full` 为整条分支，`window` 为游标之后的消息。游标只在审查得出结论（通过或有问题）后推进，审查失败或超时时不动，下次运行会把这段重新审一遍。包含用户、assistant、工具调用与结果的文字，不截断，不含自己注入的 `<watchdog>` 消息。
+- **注入**：聊天 reviewer 不通过，或 Jev 选中带 prompt 的选项时，运行一结束就以 `<watchdog name=… severity=…>` 注入匹配的会话，时机按 `delivery`：`aside` 在运行中插到下一个 step 边界、空闲时开启新一轮；`steer` 打断当前运行；`followUp` 排到当前运行之后；`nextTurn` 先排队，等用户下一次真正输入（不是斜杠命令，也不是扩展发的消息）开始的那一轮，作为一条 custom 消息注入。subagent 没有用户输入，`nextTurn` 在它下一次开始新一轮时注入；排队中的提醒只在内存里，会话重启或切换就丢失。
+- **识别会话**：主会话按文件名 `<时间戳>_<uuid>.jsonl` 识别，subagent 从 `session_init.agent` 读名字。没有会话文件（如 `omp -p --no-session`）时识别不了身份，watchdog 不启用。
+- **封顶**：设置了 `maxPerContext` 时，每个 watchdog 在一个 context 里最多注入这么多条（`nextTurn` 排队时就计入），封顶后到下次压缩前不再运行审阅；不设就不限。提醒不做去重，审出来就发。每次压缩（手动或自动）后封顶计数清零；压缩不影响累计的操作条数、`window` 游标和正在进行的判定。
+- **状态恢复**：游标在每次审查得出结论后写进会话（custom entry `mouriya.omp.watchdog-agent.cursor`），跟随分支。会话启动或恢复、`session_switch`、分支切换和树跳转时从当前分支恢复：游标取该 watchdog 文件最后一条记录；封顶计数取上次压缩之后分支上已注入的该 watchdog 提醒条数；累计操作数取游标之后的操作数。还没返回的判定丢弃。
+- **失败**：模型不可用、审查报错或超时（聊天 reviewer 90 秒）、Jev 失败都不提醒，也不推进游标，不阻塞主轮次。超时前已经流出的半截文字不算结论。subagent 上的注入是尽力而为，只有执行器收走结果前会话被重新打开才生效。
 - **用量**：聊天 reviewer 用禁止加载扩展的内存会话，不会递归。Jev 的用量和估算费用只写扩展 info 日志，不计入会话用量。两种后端各自消耗额度。
 
 **斜杠命令**（子命令、watchdog 名和范围都有补全）：
 
 |命令|作用|
 |---|---|
-|`/watchdog` 或 `/watchdog list`|列出成功解析的 watchdog 文件：当前是否生效、全局开关、本会话覆盖、目标、`every`、`scope`、后端和路径。读不了或格式错误的文件不在列表里|
+|`/watchdog` 或 `/watchdog list`|列出成功解析的 watchdog 文件：当前是否生效、全局开关、本会话覆盖、目标、`every`、`scope`、后端和路径。读不了、没有 `target` 或 Jev 声明有误的文件不在列表里，会话加载时各记一条 warning|
 |`/watchdog on\|off <name>` 或 `… <name> session`|只在本会话开启或关闭，不改文件。记录为会话自定义条目，恢复会话后仍然有效，并跟随会话分支；只能用于目标包含本会话的 watchdog|
 |`/watchdog on\|off <name> global`|改写该文件 frontmatter 里的 `enabled` 行（没有就加一行），对之后所有会话生效，并清除本会话对它的覆盖|
+|`/watchdog add <需求>`|让模型按需求起草一个新 watchdog，在对话里和用户对齐后写入项目或全局目录，见下|
+|`/watchdog edit <name> [改动]`|让模型按改动修改已有的 watchdog，和 `add` 一样先对齐再写入，见下；不写改动时，模型先列出当前行为和设置|
+|`/watchdog rm <name>`|弹窗确认后删除该文件，并清除本会话对它的覆盖；取消则保留|
 
-本会话覆盖优先于文件里的 `enabled`。关闭时正在进行的判定结果会被丢弃；重新开启时计数、游标和封顶从零开始。多个文件同名时命令报错并列出路径，需要给它们设不同的 `name`。
+本会话覆盖优先于文件里的 `enabled`。关闭时正在进行的判定结果会被丢弃；重新开启时游标、封顶计数和累计操作数按上面的规则从分支恢复。多个文件同名时命令报错并列出路径，需要给它们设不同的 `name`。`edit` 后面跟着的名字可以含空格，按最长匹配的已有名字切开，剩下的是改动。
+
+**`/watchdog add` 和 `/watchdog edit`。** 两个命令本身都不写文件，而是给当前会话的模型发一条消息（`attribution: "agent"`；模型正在运行时排到本轮之后）。消息里有：
+
+- 用户的需求或改动原文；`edit` 还附上该文件的当前全文和路径；
+- 每个设置的默认值和含义；
+- 项目位置（git root 下的 `.omp/`，没有 git root 时为 cwd 下的 `.omp/`）和全局位置（agent 目录）；
+- 默认 reviewer 此刻解析到的模型；
+- 其他 watchdog 的名字，避免重名。
+
+模型不用 `ask`，按以下几轮推进：
+
+1. **起草。** 回复依次给出预期行为、设置表、完整文件内容和绝对路径。这一轮不写盘。
+   - **`add`：** 需求写明或明显暗示的设置照需求填，其余取默认值。设置表的来源分为需求或默认。
+   - **`edit`：** 从当前文件出发，只改改动涉及的设置，其余保持现值，文件里省略的行仍取默认值。预期行为先说和现在相比哪里变了。设置表列出现值、新值，来源分为现值、改动或默认。
+   - **预期行为**包括：盯谁、多久审一次、读哪段 transcript、标记什么放过什么、一两条示例提醒、提醒怎么送达、每个 context 几条、用哪个模型、每次审阅都要花一次模型调用、看不到或做不了什么。
+2. **修改。** 用户点名要改哪些设置，模型改完后按同样格式再给一遍，并标出改动。只改设置的回复不算确认。
+3. **写入。** 用户明确确认后才写盘，最后说明从现在起会发生什么。
+   - **`add`：** 用 `write` 新建文件，不覆盖已有文件；还要说明怎么关掉它。
+   - **`edit`：** 在原路径改写。改位置或标签时，先写新文件再删旧文件，新路径不能已存在。
+
+**写入后的检查。** 任何成功的 `write` / `edit` 只要碰到 `WATCHDOG-*.md`（`edit` 按 `[路径#TAG]` 头、`MV` 目标或 `path` 参数识别），扩展都会立即重读 watchdog 列表，新文件在本会话里马上生效，并在该工具结果末尾附一行状态。状态有四种：
+
+- 已识别：附是否在本会话生效，以及 `/watchdog list` 格式的那一行；
+- 未识别：附原因，文件被忽略；
+- 合法但当前目录不会搜索到；
+- 已删除。
+
+模型据此发现问题、修正，再重新写入。
 
 #### user-prompt-inject
 

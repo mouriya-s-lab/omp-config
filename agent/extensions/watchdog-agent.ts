@@ -6,7 +6,7 @@ import {
 	type ExtensionContext,
 } from "@oh-my-pi/pi-coding-agent";
 import { TypeSafeJudge, isJudgmentApi } from "@oh-my-pi/pi-ai";
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 
@@ -50,32 +50,49 @@ import { basename, dirname, join, resolve } from "node:path";
 // parser lowercases keys) and each value is a single line.
 //
 // RUNTIME. Every discovered watchdog matching the session identity runs
-// independently with its own counter, cursor, dedupe set and cap. The counter
+// independently with its own counter, cursor and cap. The counter
 // accumulates the watched agent's actions: each assistant tool call and each
 // assistant text reply counts as one. When a watchdog's counter reaches
 // `every`, it runs immediately (mid-run), and its finding is injected as soon as
 // the review finishes, whatever state the agent is in. When the agent's run
 // settles (`agent_end`, non-continuation) with a nonzero counter below
 // `every`, the watchdog runs once for the remainder. `scope: full` reviews the
-// whole branch; `scope: window` reviews only messages after the watchdog's
-// previous run. The transcript is never truncated. Chat reviewers use a
+// whole branch; `scope: window` reviews only messages after the cursor, which
+// advances only when a review reaches a verdict and is persisted as a session
+// entry. The transcript is never truncated. Chat reviewers use a
 // tool-capable `createAgentSession`; native Jev uses `Judge.judge` and only
 // selects one configured option whose prewritten prompt (if any) is injected.
-// Findings go through `sendUserMessage`; repeats are de-duplicated and, when
-// `maxPerContext` is set, bounded per watchdog per context. Each compaction
-// starts a new context: the dedupe set and cap count reset, nothing else does.
+// Findings go through `sendUserMessage`, bounded per watchdog per context when
+// `maxPerContext` is set; `nextTurn` findings wait for the user's next prompt
+// (a subagent's next turn) and arrive as a custom message. Each compaction
+// starts a new context: the cap count resets, nothing else does. On session
+// load or branch move the cursor is restored from its entries, the cap count
+// from the findings already injected on the branch since the last compaction,
+// and the counter from the actions after the cursor.
 //
 // COMMANDS. `/watchdog [list]` lists every discovered file with its global
 // (`enabled`) and session state. `/watchdog on|off <name> [session|global]`
 // switches one watchdog: `session` (default) records a session custom entry that
 // shadows the file for this session only and follows the session branch;
 // `global` rewrites the file's `enabled` line and drops this session's override.
+// `/watchdog add <requirement>` and `/watchdog edit <name> [change]` send the
+// model a prompt (attribution `agent`) carrying the request, every setting's
+// default, the project and global paths and the other names in use (`edit`
+// also the current file): the model drafts a complete file plus the expected
+// behaviour (for `edit`, what changes against now), revises it in chat as the
+// user names changes (no `ask`), and writes only after explicit confirmation.
+// `/watchdog rm <name>` deletes the file after a UI confirmation and drops
+// this session's override of it. Any successful `write`/`edit` touching a
+// `WATCHDOG-*.md` re-reads the roster at once and appends the file's status
+// (recognised and active, NOT recognised with the reason, valid but not
+// searched, or removed) to that tool result.
 // Subcommands, names and scopes are offered as argument completions.
 //
 // FAILURE POLICY. Every failure path (no match, unresolved model, judge
-// unavailable, reviewer error/timeout, malformed file) degrades to "no note".
-// Explicit native judge selection never falls back to a chat model. The
-// extension never blocks, mutates, or corrupts a primary turn.
+// unavailable, reviewer error/timeout, malformed file) degrades to "no note"
+// and leaves the cursor where it was. Explicit native judge selection never
+// falls back to a chat model. The extension never blocks, mutates, or corrupts
+// a primary turn.
 //
 // SCOPE HONESTY. On a subagent the note is best-effort: it lands if the turn
 // re-opens before the executor collects the slice result. On the main session a
@@ -264,18 +281,22 @@ function setFrontmatterEnabled(raw: string, enabled: boolean): string | null {
 	return raw.slice(0, blockStart) + block + raw.slice(blockEnd);
 }
 
-/** Parse one `WATCHDOG-*.md` (enabled or not); returns null when invalid, targetless, or unreadable. */
-function parseWatchdogFile(path: string, warn?: (message: string) => void): WatchdogSpec | null {
+type WatchdogParse =
+	| { readonly kind: "ok"; readonly spec: WatchdogSpec }
+	| { readonly kind: "invalid"; readonly reason: string };
+
+/** Parse one `WATCHDOG-*.md` (enabled or not); invalid when unreadable, targetless, or a malformed Jev declaration. */
+function parseWatchdogFile(path: string): WatchdogParse {
 	let raw: string;
 	try {
 		raw = readFileSync(path, "utf8");
-	} catch {
-		return null;
+	} catch (error) {
+		return { kind: "invalid", reason: `cannot read: ${error instanceof Error ? error.message : String(error)}` };
 	}
 	const { fields, body } = parseFrontmatter(raw);
 	const enabled = fields.enabled === undefined || /^(true|yes|on|1)$/i.test(unquote(fields.enabled));
 	const targets = fields.target ? toList(fields.target) : [];
-	if (targets.length === 0) return null;
+	if (targets.length === 0) return { kind: "invalid", reason: "frontmatter has no `target`" };
 
 	const rawTools = fields.tools ? toList(fields.tools) : [...DEFAULT_TOOLS];
 	const tools = rawTools.map(t => t.toLowerCase()).filter(t => GRANTABLE_TOOLS[t] === true);
@@ -297,30 +318,32 @@ function parseWatchdogFile(path: string, warn?: (message: string) => void): Watc
 	if (fields.judge !== undefined) {
 		const judge = unquote(fields.judge);
 		const slash = judge.indexOf("/");
-		const reject = (reason: string): null => {
-			warn?.(`watchdog "${path}": ${reason}`);
-			return null;
-		};
 		if (fields.model !== undefined || fields.tools !== undefined || fields.note !== undefined || !common.guidance ||
 			slash <= 0 || slash === judge.length - 1 || THINKING_SUFFIXES[judge.slice(judge.lastIndexOf(":") + 1).toLowerCase()] === true) {
-			return reject("judge requires provider/model and a nonempty body; model, tools, note and thinking suffixes are not allowed");
+			return { kind: "invalid", reason: "judge requires provider/model and a nonempty body; model, tools, note and thinking suffixes are not allowed" };
 		}
 		const parsed = parseJevOptions(fields, delivery);
-		if (parsed.kind === "invalid") return reject(parsed.reason);
+		if (parsed.kind === "invalid") return parsed;
 		const instructions = unquote(fields.instructions ?? "");
 		return {
-			...common,
-			kind: "jev",
-			judge: { provider: judge.slice(0, slash), modelId: judge.slice(slash + 1) },
-			instructions: instructions || DEFAULT_JEV_INSTRUCTIONS,
-			options: parsed.options,
+			kind: "ok",
+			spec: {
+				...common,
+				kind: "jev",
+				judge: { provider: judge.slice(0, slash), modelId: judge.slice(slash + 1) },
+				instructions: instructions || DEFAULT_JEV_INSTRUCTIONS,
+				options: parsed.options,
+			},
 		};
 	}
 	return {
-		...common,
-		kind: "chat",
-		model: fields.model ? unquote(fields.model) : undefined,
-		tools: tools.length > 0 ? tools : [...DEFAULT_TOOLS],
+		kind: "ok",
+		spec: {
+			...common,
+			kind: "chat",
+			model: fields.model ? unquote(fields.model) : undefined,
+			tools: tools.length > 0 ? tools : [...DEFAULT_TOOLS],
+		},
 	};
 }
 
@@ -564,20 +587,24 @@ function resolveModelSpec(ctx: ExtensionContext, base: string): Model | undefine
 	return available.find((m: Model) => `${m.provider}/${m.id}` === base) ?? available.find((m: Model) => m.id === base);
 }
 
-/** Reviewer model + thinking level: explicit `model` (honoring `:effort`), else the `advisor` role. */
-function resolveReviewer(ctx: ExtensionContext, spec: ChatWatchdog): { model: Model; thinkingLevel: string } | null {
-	if (spec.model) {
-		const { base, effort } = splitEffort(spec.model);
-		const model = resolveModelSpec(ctx, base);
-		if (model) return { model, thinkingLevel: effort ?? "off" };
-		return null;
-	}
+/** Model a chat watchdog without `model` reviews with: the advisor role chain, else the session model. */
+function defaultReviewerModel(ctx: ExtensionContext): Model | undefined {
 	for (const role of ["@advisor", "advisor", "@slow"]) {
 		const model = ctx.models?.resolve?.(role);
-		if (model) return { model, thinkingLevel: "off" };
+		if (model) return model;
 	}
-	const current = ctx.models?.current?.();
-	return current ? { model: current, thinkingLevel: "off" } : null;
+	return ctx.models?.current?.();
+}
+
+/** Reviewer model + thinking level: explicit `model` (honoring `:effort`), else the `advisor` role. */
+function resolveReviewer(ctx: ExtensionContext, spec: ChatWatchdog): { model: Model; thinkingLevel: string } | null {
+	if (!spec.model) {
+		const model = defaultReviewerModel(ctx);
+		return model ? { model, thinkingLevel: "off" } : null;
+	}
+	const { base, effort } = splitEffort(spec.model);
+	const model = resolveModelSpec(ctx, base);
+	return model ? { model, thinkingLevel: effort ?? "off" } : null;
 }
 
 function buildReviewPrompt(guidance: string, transcript: string): string {
@@ -609,19 +636,23 @@ function interpretVerdict(answer: string, delivery: DeliverAs): Verdict | null {
 	return { kind: "advice", severity, note, delivery };
 }
 
-async function withTimeout(ctx: ExtensionContext, work: Promise<unknown>, ms: number): Promise<void> {
-	if (typeof ctx.setTimeout !== "function") {
-		await work.catch(() => undefined);
-		return;
-	}
+type RunOutcome = "done" | "failed" | "timeout";
+
+async function withTimeout(ctx: ExtensionContext, work: Promise<unknown>, ms: number): Promise<RunOutcome> {
+	const settled = work.then(
+		(): RunOutcome => "done",
+		(): RunOutcome => "failed",
+	);
+	if (typeof ctx.setTimeout !== "function") return settled;
 	let timer: unknown;
-	await Promise.race([
-		work.catch(() => undefined),
-		new Promise<void>(res => {
-			timer = ctx.setTimeout(() => res(), ms);
+	const outcome = await Promise.race([
+		settled,
+		new Promise<RunOutcome>(res => {
+			timer = ctx.setTimeout(() => res("timeout"), ms);
 		}),
 	]);
 	if (timer !== undefined && typeof ctx.clearTimer === "function") ctx.clearTimer(timer);
+	return outcome;
 }
 
 /** Runs one reviewer session over the transcript. Never throws; failures → null. */
@@ -633,6 +664,7 @@ async function runReviewer(pi: ExtensionAPI, ctx: ExtensionContext, spec: ChatWa
 	}
 	let deltas = "";
 	let finalMessages: unknown;
+	let outcome: RunOutcome = "failed";
 	try {
 		const { session } = await createAgentSession({
 			cwd: ctx.cwd,
@@ -661,13 +693,18 @@ async function runReviewer(pi: ExtensionAPI, ctx: ExtensionContext, spec: ChatWa
 			}
 		});
 		try {
-			await withTimeout(ctx, session.prompt(buildReviewPrompt(spec.guidance, transcript)), REVIEW_TIMEOUT_MS);
+			outcome = await withTimeout(ctx, session.prompt(buildReviewPrompt(spec.guidance, transcript)), REVIEW_TIMEOUT_MS);
 		} finally {
 			unsubscribe();
 			await session.dispose().catch(() => undefined);
 		}
 	} catch (error) {
 		pi.logger?.warn?.(`watchdog "${spec.name}": reviewer run failed`, { error: String(error) });
+		return null;
+	}
+	// A timed-out or failed prompt may have streamed partial text; it is not a verdict.
+	if (outcome !== "done") {
+		pi.logger?.warn?.(`watchdog "${spec.name}": reviewer ${outcome === "timeout" ? "timed out" : "failed"} — skipping`);
 		return null;
 	}
 
@@ -762,27 +799,21 @@ async function runJev(pi: ExtensionAPI, ctx: ExtensionContext, spec: JevWatchdog
 	}
 }
 
-function normalizeNote(note: string): string {
-	return note.toLowerCase().replace(/\s+/g, " ").trim();
-}
-
 // --- extension registration -------------------------------------------------
 
 type RunState = { readonly kind: "idle" } | { readonly kind: "running"; readonly flushAfter: boolean };
 
-/** Per-watchdog runtime state; each watchdog counts, runs, dedupes and caps on its own. */
+/** Per-watchdog runtime state; each watchdog counts, runs and caps on its own. */
 type WatchdogState = {
 	/** Latest parse of the watchdog's file; replaced in place when the roster is re-read. */
 	spec: WatchdogSpec;
-	/** Watched actions since this watchdog's last run started. */
+	/** Watched actions since this watchdog's last run started; restored as the actions after the cursor. */
 	pending: number;
-	/** Newest message timestamp covered by the last run (`window` scope cursor). */
+	/** Newest message timestamp covered by the last review that reached a verdict; persisted per file. */
 	cursor: number;
 	run: RunState;
-	/** Advisories delivered since the last compaction (or branch/tree reset); compared against `maxPerContext`. */
+	/** Advisories delivered since the last compaction; restored from the branch; compared against `maxPerContext`. */
 	sent: number;
-	/** Normalized advisory texts delivered since the last compaction (or branch/tree reset). */
-	readonly notes: Set<string>;
 };
 
 /** Session-scoped switch for one watchdog file, persisted as a custom session entry. */
@@ -809,6 +840,62 @@ function overridesFromBranch(entries: ReadonlyArray<unknown>): Map<string, boole
 	return out;
 }
 
+/** Window cursor of one watchdog file, persisted after each review that reaches a verdict. */
+const CURSOR_ENTRY_TYPE = "mouriya.omp.watchdog-agent.cursor";
+type CursorEntry = { readonly filePath: string; readonly cursor: number };
+
+/** Cursors in effect on the given branch: the last entry per file wins. */
+function cursorsFromBranch(entries: ReadonlyArray<unknown>): Map<string, number> {
+	const out = new Map<string, number>();
+	for (const e of entries) {
+		if (!hasKey(e, "type") || e.type !== "custom" || !hasKey(e, "customType") || e.customType !== CURSOR_ENTRY_TYPE) continue;
+		const data = hasKey(e, "data") ? e.data : undefined;
+		if (!hasKey(data, "filePath") || typeof data.filePath !== "string" || !hasKey(data, "cursor") || typeof data.cursor !== "number") continue;
+		out.set(data.filePath, data.cursor);
+	}
+	return out;
+}
+
+/** Attribute-safe watchdog name, as written into the injected `<watchdog name="…">` tag. */
+function escapeAttr(value: string): string {
+	return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+/** Custom message type of `nextTurn` deliveries (stored as `custom_message` session entries). */
+const NEXT_TURN_CUSTOM_TYPE = "watchdog";
+
+/** Findings of the named watchdog injected on the branch since its last compaction: user messages, and the `watchdog` custom messages `nextTurn` delivers. */
+function deliveredSinceCompaction(entries: ReadonlyArray<unknown>, name: string): number {
+	const marker = `<watchdog name="${escapeAttr(name)}"`;
+	let count = 0;
+	for (const e of entries) {
+		if (!hasKey(e, "type")) continue;
+		if (e.type === "compaction") {
+			count = 0;
+			continue;
+		}
+		let content: unknown;
+		if (e.type === "custom_message" && hasKey(e, "customType") && e.customType === NEXT_TURN_CUSTOM_TYPE) {
+			content = hasKey(e, "content") ? e.content : undefined;
+		} else if (e.type === "message" && hasKey(e, "message") && hasKey(e.message, "role") && e.message.role === "user") {
+			content = hasKey(e.message, "content") ? e.message.content : undefined;
+		} else {
+			continue;
+		}
+		count += textBlocks(content).split(marker).length - 1;
+	}
+	return count;
+}
+
+/** Watched actions on the branch stamped after the cursor. */
+function actionsAfter(entries: ReadonlyArray<unknown>, cursor: number): number {
+	let count = 0;
+	for (const m of branchMessages(entries)) {
+		if ((messageTimestamp(m) ?? 0) > cursor) count += countActions(m);
+	}
+	return count;
+}
+
 type Toggle = "on" | "off";
 type ToggleScope = "session" | "global";
 
@@ -816,21 +903,174 @@ type ToggleScope = "session" | "global";
 type WatchdogCommand =
 	| { readonly kind: "list" }
 	| { readonly kind: "toggle"; readonly toggle: Toggle; readonly name: string; readonly scope: ToggleScope }
+	| { readonly kind: "add"; readonly requirement: string }
+	| { readonly kind: "rm"; readonly name: string }
+	/** `rest` is `<name> [change]`; the name may contain spaces, so it is split against the roster. */
+	| { readonly kind: "edit"; readonly rest: string }
 	| { readonly kind: "invalid"; readonly reason: string };
 
-const WATCHDOG_USAGE = "usage: /watchdog [list] | /watchdog on|off <name> [session|global]";
+const WATCHDOG_USAGE =
+	"usage: /watchdog [list] | on|off <name> [session|global] | add <requirement> | edit <name> [change] | rm <name>";
 
 function parseWatchdogCommand(args: string): WatchdogCommand {
 	const tokens = args.trim().split(/\s+/).filter(Boolean);
 	const sub = (tokens[0] ?? "list").toLowerCase();
-	if (sub === "list") return tokens.length <= 1 ? { kind: "list" } : { kind: "invalid", reason: WATCHDOG_USAGE };
-	if (sub !== "on" && sub !== "off") return { kind: "invalid", reason: WATCHDOG_USAGE };
-	const rest = tokens.slice(1);
-	const last = rest.at(-1)?.toLowerCase();
-	const scope: ToggleScope = last === "global" ? "global" : "session";
-	const nameTokens = last === "global" || last === "session" ? rest.slice(0, -1) : rest;
-	if (nameTokens.length === 0) return { kind: "invalid", reason: WATCHDOG_USAGE };
-	return { kind: "toggle", toggle: sub, name: nameTokens.join(" "), scope };
+	const rest = args.trim().slice(sub.length).trim();
+	switch (sub) {
+		case "list":
+			return tokens.length <= 1 ? { kind: "list" } : { kind: "invalid", reason: WATCHDOG_USAGE };
+		case "add":
+			return rest === "" ? { kind: "invalid", reason: "usage: /watchdog add <requirement> — describe what the watchdog should catch" } : { kind: "add", requirement: rest };
+		case "rm":
+			return rest === "" ? { kind: "invalid", reason: "usage: /watchdog rm <name>" } : { kind: "rm", name: rest };
+		case "edit":
+			return rest === "" ? { kind: "invalid", reason: "usage: /watchdog edit <name> [change]" } : { kind: "edit", rest };
+		case "on":
+		case "off": {
+			const words = tokens.slice(1);
+			const last = words.at(-1)?.toLowerCase();
+			const scope: ToggleScope = last === "global" ? "global" : "session";
+			const nameTokens = last === "global" || last === "session" ? words.slice(0, -1) : words;
+			if (nameTokens.length === 0) return { kind: "invalid", reason: WATCHDOG_USAGE };
+			return { kind: "toggle", toggle: sub, name: nameTokens.join(" "), scope };
+		}
+		default:
+			return { kind: "invalid", reason: WATCHDOG_USAGE };
+	}
+}
+
+/** Project root for new project-level watchdogs: the nearest git root above cwd (not past home), else cwd. */
+function projectRoot(cwd: string): string {
+	const home = homedir();
+	let dir = resolve(cwd);
+	for (;;) {
+		if (existsSync(join(dir, ".git"))) return dir;
+		const parent = dirname(dir);
+		if (parent === dir || dir === home) return resolve(cwd);
+		dir = parent;
+	}
+}
+
+/** Hashline `edit` file headers (`[path#TAG]`) and `MV` destinations; other edit modes carry `path`. */
+const EDIT_PATH_PATTERN = /^\[([^\]\n]+?)#[0-9A-Fa-f]{4}\]|^MV\s+"?([^"\n]+?)"?\s*$/gm;
+
+/** Absolute `WATCHDOG-*.md` paths a successful `write` or `edit` call touched. */
+function touchedWatchdogFiles(toolName: string, input: Record<string, unknown>, cwd: string): string[] {
+	const raw: string[] = [];
+	if ((toolName === "write" || toolName === "edit") && typeof input.path === "string") raw.push(input.path);
+	if (toolName === "edit" && typeof input.input === "string") {
+		for (const m of input.input.matchAll(EDIT_PATH_PATTERN)) raw.push(m[1] ?? m[2]);
+	}
+	const files = new Set<string>();
+	for (const path of raw) {
+		const expanded = path === "~" || path.startsWith("~/") ? join(homedir(), path.slice(1)) : path;
+		const absolute = resolve(cwd, expanded);
+		if (WATCHDOG_FILE_PATTERN.test(basename(absolute))) files.add(absolute);
+	}
+	return [...files];
+}
+
+/** Facts every `/watchdog add|edit` draft depends on. */
+type DraftContext = {
+	readonly projectDir: string;
+	readonly globalDir: string;
+	/** Every discovered watchdog; names in use. */
+	readonly existing: readonly WatchdogSpec[];
+	/** `provider/id` the chat reviewer resolves to without `model`, or null when nothing resolves. */
+	readonly defaultModel: string | null;
+};
+
+const WATCHDOG_INTRO =
+	"A watchdog is a reviewer that runs alongside a watched agent: every few actions it reads that agent's transcript, judges only the latest work against the file's guidance, and injects a short `<watchdog name=… severity=…>` note into the watched session when the work falls short; otherwise it stays silent. Each watchdog is one file `WATCHDOG-<Label>.md`: a frontmatter block between `---` fences (one `key: value` per line, keys case-insensitive, every value on a single line) followed by a markdown body.";
+
+const EXPECTED_BEHAVIOUR =
+	"Expected behaviour, concretely: which session or agent is watched; when a review runs (after how many actions, plus once at the end of each run); what transcript it reads; what it flags and what it deliberately lets pass; one or two example notes it would inject, written as it would write them; how and when a note reaches the watched agent; how many notes per context; which model does the reviewing and that every review costs a model call; and what it cannot see or do.";
+
+const NO_ASK = "Do not use the `ask` tool: every setting has a value or a default, so every draft is complete and the user only names what to change.";
+
+const WRITE_STATUS =
+	"The `write`/`edit` result then carries this watchdog's status line from the watchdog extension; if it says the file is not recognised or not searched, fix that and write again.";
+
+/** Settings, defaults, Jev rules and names in use, shared by the add and edit prompts. */
+function settingsReference(draft: DraftContext, exclude: string | null): string {
+	const others = draft.existing.filter(spec => spec.filePath !== exclude);
+	const existing = others.length === 0
+		? "(none)"
+		: others.map(spec => `- ${spec.name} — target ${spec.targets.join(",")} — ${spec.filePath}`).join("\n");
+	const defaultModel = draft.defaultModel ?? "nothing resolves now, so reviews would be skipped until a model is pinned";
+	return `Settings (frontmatter keys in backticks):
+- Location — default project: \`${draft.projectDir}/WATCHDOG-<Label>.md\`, active in sessions started anywhere inside this project. Global: \`${draft.globalDir}/WATCHDOG-<Label>.md\`, active in every project.
+- Label and \`name\` — default: a short PascalCase label derived from the requirement; \`name\` defaults to the label, so omit the \`name\` line. \`/watchdog on|off|edit|rm\` address it by name, so it must not clash with another watchdog.
+- \`target\` (required) — default \`main\`, the user's top-level session. Also: an agent name such as \`task:mid\` or \`mentor:default\`; \`subagents\` for every subagent; \`*\` for every session; or a comma-separated list.
+- Backend — default chat reviewer: an extension-free model session with tools reads the transcript and answers PASS or a severity (\`nit\`, \`concern\`, \`blocker\`) with one note of at most ~80 words citing files, symbols or lines. Alternative Jev judge (see below): no tools, picks one of the options the file declares and injects that option's prewritten text.
+- \`model\` (chat only) — default: omit the line, and the reviewer uses the \`@advisor\` role, then \`advisor\`, then \`@slow\`, then the session model; right now that is ${defaultModel}. Pin with \`provider/model\` or \`provider/model:effort\`; a pinned model that does not resolve skips every review rather than falling back.
+- \`tools\` (chat only) — default \`read, grep, glob\`. Allowed: read, grep, glob, ast_grep, web_search, edit, write, bash, eval; edit, write, bash and eval let the reviewer change the workspace, so grant them only on request.
+- \`delivery\` — default \`aside\`: while the watched agent runs, the note lands at its next step boundary without interrupting; when it is idle, the note starts a new turn. \`steer\` interrupts the current run; \`followUp\` queues the note after the current run; \`nextTurn\` holds it until the user's next real prompt (a subagent's next turn) and is lost if the session restarts first.
+- \`every\` — default 30: watched actions between reviews, counting each tool call and each non-empty text reply; a run that ends with fewer leftover actions is reviewed once more at its end.
+- \`scope\` — default \`full\`: every review reads the whole branch. \`window\`: only messages since the previous review reached a verdict, which keeps long sessions cheap but loses older context.
+- \`maxPerContext\` — default: omit, unlimited. A number caps notes per context; once capped, no reviews run until the next compaction resets the count.
+- \`enabled\` — default: omit, on.
+- Body (chat) — the review priorities: what to flag and what to let pass, concrete enough that PASS is the common answer.
+
+Jev judge, only when the user picks it: \`judge: provider/model\` (for example \`typesafe/jev-latest\`) replaces \`model\` and \`tools\`, and no \`:effort\` suffix is allowed. The body is required and is the judgment criterion. Optional \`instructions\` line. Declare at least two options as \`option.<label>: <criteria>\` (labels: lowercase letters, digits, \`_\`, \`-\`; an empty criteria means the label says it all). \`option.<label>.prompt: <text>\` is injected verbatim when Jev picks that label, and at least one option needs it; options without a prompt are silent passes. \`option.<label>.delivery\` overrides \`delivery\` for one prompted option. The severity shown is the picked label.
+
+Write only \`target\` and the lines whose values differ from their defaults; omitted lines take the defaults above.
+
+Other watchdogs (names in use):
+${existing}`;
+}
+
+function buildAddPrompt(requirement: string, draft: DraftContext): string {
+	return `<watchdog-add>
+The user ran \`/watchdog add\` to add a watchdog. Their requirement, verbatim:
+"""
+${requirement}
+"""
+
+${WATCHDOG_INTRO}
+
+Settle the file with the user in chat rounds. ${NO_ASK}
+
+1. Draft. Fill every setting below: take a value from the requirement when it states or clearly implies one, otherwise keep the default. Reply with, in this order:
+   - ${EXPECTED_BEHAVIOUR}
+   - A settings table with every setting: value, source (\`requirement\` or \`default\`), and a one-line effect, so the user can change any setting by name.
+   - The full file content and its absolute path.
+   - One closing line asking which settings to change, or for confirmation to write it.
+   Write nothing to disk in this round.
+2. Revise. When the user names changes, apply them and reply again in the shape of step 1, marking the changed values. A reply that only changes settings is not a confirmation.
+3. Write. Only after the user explicitly confirms the latest draft, create the file with \`write\`. Never overwrite an existing file; if the path exists, choose another label and say so. ${WRITE_STATUS} End with one short paragraph on what happens from now on and how to switch it off (\`/watchdog off <name>\` for this session, \`/watchdog off <name> global\` for good).
+
+${settingsReference(draft, null)}
+</watchdog-add>`;
+}
+
+function buildEditPrompt(spec: WatchdogSpec, current: string, requirement: string | null, draft: DraftContext): string {
+	const request = requirement === null
+		? "They named no change yet."
+		: `The change they want, verbatim:\n"""\n${requirement}\n"""`;
+	return `<watchdog-edit>
+The user ran \`/watchdog edit\` to change the watchdog \`${spec.name}\` at \`${spec.filePath}\`. ${request}
+
+Current file content, verbatim:
+"""
+${current}
+"""
+
+${WATCHDOG_INTRO}
+
+Settle the change with the user in chat rounds. ${NO_ASK}
+
+1. Draft. Start from the current file and apply the requested change; every setting the request does not touch keeps its current value, and a line the file omits keeps its default. With no change named, the draft is the current file as it is. Reply with, in this order:
+   - What changes compared with the current behaviour, then the full expected behaviour after the change. ${EXPECTED_BEHAVIOUR}
+   - A settings table with every setting: current value, new value, source (\`current\`, \`requirement\`, or \`default\` for a line the file omits), and a one-line effect, so the user can change any setting by name.
+   - The full new file content and its absolute path.
+   - One closing line asking which settings to change, or for confirmation to write it.
+   Write nothing to disk in this round.
+2. Revise. When the user names changes, apply them and reply again in the shape of step 1, marking the changed values. A reply that only changes settings is not a confirmation.
+3. Write. Only after the user explicitly confirms the latest draft, rewrite the file at its current path. A location or label change writes the new file, then removes the old one, and the new path must not already exist. ${WRITE_STATUS} End with one short paragraph on what happens from now on.
+
+${settingsReference(draft, spec.filePath)}
+</watchdog-edit>`;
 }
 
 export default function watchdogAgent(pi: ExtensionAPI): void {
@@ -841,6 +1081,12 @@ export default function watchdogAgent(pi: ExtensionAPI): void {
 	let overrides = new Map<string, boolean>();
 	/** Runtime state of the watchdogs active in this session, keyed by file path. */
 	let states = new Map<string, WatchdogState>();
+	/** The loaded session's branch; source of restored cursors, cap counts and pending actions. */
+	let branchOf: () => ReadonlyArray<unknown> = () => [];
+	/** `nextTurn` findings waiting for the next user prompt (a subagent's next turn). */
+	let nextTurnQueue: string[] = [];
+	/** Set by a user prompt; consumed by the turn it starts. */
+	let userTurnArmed = false;
 
 	const targetsHere = (spec: WatchdogSpec): boolean => identity !== null && matchesIdentity(spec, identity);
 	const effectiveEnabled = (spec: WatchdogSpec): boolean => overrides.get(spec.filePath) ?? spec.enabled;
@@ -849,16 +1095,30 @@ export default function watchdogAgent(pi: ExtensionAPI): void {
 	const refresh = (warn: boolean): void => {
 		const specs: WatchdogSpec[] = [];
 		for (const file of discoverWatchdogFiles(cwd)) {
-			const spec = parseWatchdogFile(file, warn ? message => pi.logger?.warn?.(message) : undefined);
-			if (spec) specs.push(spec);
+			const parsed = parseWatchdogFile(file);
+			if (parsed.kind === "ok") specs.push(parsed.spec);
+			else if (warn) pi.logger?.warn?.(`watchdog "${file}": ${parsed.reason}`);
 		}
 		roster = specs;
 		const next = new Map<string, WatchdogState>();
+		const branch = branchOf();
+		const cursors = cursorsFromBranch(branch);
 		for (const spec of specs) {
 			if (!targetsHere(spec) || !effectiveEnabled(spec)) continue;
 			const prev = states.get(spec.filePath);
-			if (prev) prev.spec = spec;
-			next.set(spec.filePath, prev ?? { spec, pending: 0, cursor: 0, run: { kind: "idle" }, sent: 0, notes: new Set<string>() });
+			if (prev) {
+				prev.spec = spec;
+				next.set(spec.filePath, prev);
+				continue;
+			}
+			const cursor = cursors.get(spec.filePath) ?? 0;
+			next.set(spec.filePath, {
+				spec,
+				pending: actionsAfter(branch, cursor),
+				cursor,
+				run: { kind: "idle" },
+				sent: deliveredSinceCompaction(branch, spec.name),
+			});
 		}
 		states = next;
 	};
@@ -870,27 +1130,35 @@ export default function watchdogAgent(pi: ExtensionAPI): void {
 		pi.logger?.info?.(`watchdog: ${active.length} watchdog(s) active for ${who}${active.length > 0 ? ` — ${active.join(", ")}` : ""}`);
 	};
 
-	/** Session boundary: identity, overrides and the active set are rebuilt; all runtime state starts over. */
+	/** Session boundary: identity, overrides and the active set are rebuilt; state is restored from the branch. */
 	const load = (ctx: ExtensionContext): void => {
 		identity = resolveIdentity(ctx);
 		cwd = ctx.cwd;
-		overrides = overridesFromBranch(ctx.sessionManager.getBranch());
+		branchOf = () => ctx.sessionManager.getBranch();
+		overrides = overridesFromBranch(branchOf());
 		states = new Map();
+		nextTurnQueue = [];
+		userTurnArmed = false;
 		refresh(true);
 		logActive();
 	};
 
-	const deliver = (state: WatchdogState, verdict: Verdict | null): void => {
-		if (!verdict || verdict.kind !== "advice") return;
+	const deliver = (state: WatchdogState, verdict: Verdict): void => {
+		if (verdict.kind !== "advice") return;
 		const spec = state.spec;
-		const key = normalizeNote(verdict.note);
-		if (key === "" || state.notes.has(key) || state.sent >= spec.maxPerContext) return;
-		state.notes.add(key);
-		const safeName = spec.name.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-		const text = `<watchdog name="${safeName}" severity="${verdict.severity}">\n${verdict.note}\n</watchdog>`;
-		pi.sendUserMessage(text, { deliverAs: verdict.delivery, attribution: "agent" });
+		if (verdict.note.trim() === "" || state.sent >= spec.maxPerContext) return;
+		const text = `<watchdog name="${escapeAttr(spec.name)}" severity="${verdict.severity}">\n${verdict.note}\n</watchdog>`;
+		if (verdict.delivery === "nextTurn") nextTurnQueue.push(text);
+		else pi.sendUserMessage(text, { deliverAs: verdict.delivery, attribution: "agent" });
 		state.sent += 1;
-		pi.logger?.info?.(`watchdog "${spec.name}": ${verdict.severity} → delivered (${state.sent}/${Number.isFinite(spec.maxPerContext) ? spec.maxPerContext : "∞"})`);
+		pi.logger?.info?.(`watchdog "${spec.name}": ${verdict.severity} → ${verdict.delivery === "nextTurn" ? "queued for next turn" : "delivered"} (${state.sent}/${Number.isFinite(spec.maxPerContext) ? spec.maxPerContext : "∞"})`);
+	};
+
+	/** Advance and persist the window cursor once a review covering up to `reviewed` reached a verdict. */
+	const advanceCursor = (state: WatchdogState, reviewed: number): void => {
+		if (reviewed <= state.cursor) return;
+		state.cursor = reviewed;
+		pi.appendEntry<CursorEntry>(CURSOR_ENTRY_TYPE, { filePath: state.spec.filePath, cursor: reviewed });
 	};
 
 	/** Start one review now; never awaited by the caller, so the watched agent keeps running. */
@@ -899,16 +1167,23 @@ export default function watchdogAgent(pi: ExtensionAPI): void {
 		state.pending = 0;
 		if (state.sent >= spec.maxPerContext) return;
 		const messages = selectMessages(ctx.sessionManager.getBranch(), spec.scope, state.cursor, tail);
-		for (const m of messages) state.cursor = Math.max(state.cursor, messageTimestamp(m) ?? 0);
+		let reviewed = state.cursor;
+		for (const m of messages) reviewed = Math.max(reviewed, messageTimestamp(m) ?? 0);
 		const transcript = renderTranscript(messages);
-		if (transcript.trim() === "") return;
+		if (transcript.trim() === "") {
+			advanceCursor(state, reviewed);
+			return;
+		}
 		state.run = { kind: "running", flushAfter: false };
 		const review = spec.kind === "jev" ? runJev(pi, ctx, spec, transcript) : runReviewer(pi, ctx, spec, transcript);
 		// A session boundary, branch move or switch-off removed this state; its finding is stale.
 		const live = (): boolean => states.get(spec.filePath) === state;
 		void review.then(
 			verdict => {
-				if (live()) deliver(state, verdict);
+				// No verdict = failed review: the cursor stays, so the next run covers this range again.
+				if (!live() || verdict === null) return;
+				advanceCursor(state, reviewed);
+				deliver(state, verdict);
 			},
 			() => undefined,
 		).finally(() => {
@@ -928,13 +1203,100 @@ export default function watchdogAgent(pi: ExtensionAPI): void {
 		return `${spec.name}: ${state} · global ${spec.enabled ? "on" : "off"} · session ${session} · target ${spec.targets.join(",")} · every ${spec.every} · scope ${spec.scope} · ${backend}\n  ${spec.filePath}`;
 	};
 
-	const toggle = (command: Extract<WatchdogCommand, { kind: "toggle" }>): { readonly level: "info" | "error"; readonly text: string } => {
-		const matches = roster.filter(spec => spec.name.toLowerCase() === command.name.toLowerCase());
-		if (matches.length === 0) return { level: "error", text: `watchdog "${command.name}" not found (see /watchdog list)` };
-		if (matches.length > 1) {
-			return { level: "error", text: `watchdog name "${command.name}" is ambiguous; give each file a unique \`name:\`:\n${matches.map(s => `  ${s.filePath}`).join("\n")}` };
+	/** Status line a `write`/`edit` result carries for a watchdog file it touched. */
+	const fileStatus = (path: string): string => {
+		if (!existsSync(path)) return `watchdog file ${path}: removed; no watchdog loads from it.`;
+		const parsed = parseWatchdogFile(path);
+		if (parsed.kind === "invalid") return `watchdog file ${path}: NOT recognised (${parsed.reason}); it is ignored until fixed.`;
+		if (!roster.some(spec => spec.filePath === path)) {
+			return `watchdog file ${path}: valid but not searched from ${cwd}; watchdogs load from ${agentDir()} and from <dir>/ or <dir>/.omp/ for each dir between ${cwd} and its git root.`;
 		}
-		const spec = matches[0];
+		const spec = parsed.spec;
+		const active = !targetsHere(spec) ? "not active in this session (its target excludes it)" : effectiveEnabled(spec) ? "active in this session now" : "switched off in this session";
+		return `watchdog file ${path}: recognised, ${active}.\n${describe(spec)}`;
+	};
+
+	/** The one discovered watchdog with this name (case-insensitive), or the error to show. */
+	const findByName = (name: string): { readonly kind: "found"; readonly spec: WatchdogSpec } | { readonly kind: "error"; readonly text: string } => {
+		const matches = roster.filter(spec => spec.name.toLowerCase() === name.toLowerCase());
+		if (matches.length === 0) return { kind: "error", text: `watchdog "${name}" not found (see /watchdog list)` };
+		if (matches.length > 1) {
+			return { kind: "error", text: `watchdog name "${name}" is ambiguous; give each file a unique \`name:\`:\n${matches.map(s => `  ${s.filePath}`).join("\n")}` };
+		}
+		return { kind: "found", spec: matches[0] };
+	};
+
+	/**
+	 * Split `/watchdog edit` arguments into the longest discovered name they start with and the
+	 * requested change (null when none follows). Null when no name matches.
+	 */
+	const splitEditTarget = (rest: string): { readonly name: string; readonly change: string | null } | null => {
+		const lower = rest.toLowerCase();
+		let best = "";
+		for (const spec of roster) {
+			const name = spec.name.toLowerCase();
+			if (name.length <= best.length || !lower.startsWith(name)) continue;
+			if (lower.length === name.length || /\s/.test(lower[name.length])) best = name;
+		}
+		if (best === "") return null;
+		const change = rest.slice(best.length).trim();
+		return { name: rest.slice(0, best.length), change: change === "" ? null : change };
+	};
+
+	/** The model prompt for `/watchdog add|edit`, or the error to show instead. */
+	const draftPrompt = (
+		command: Extract<WatchdogCommand, { kind: "add" | "edit" }>,
+		ctx: ExtensionContext,
+	): { readonly kind: "prompt"; readonly text: string } | { readonly kind: "error"; readonly text: string } => {
+		refresh(false);
+		const model = defaultReviewerModel(ctx);
+		const draft: DraftContext = {
+			projectDir: join(projectRoot(cwd), ".omp"),
+			globalDir: agentDir(),
+			existing: roster,
+			defaultModel: model ? `${model.provider}/${model.id}` : null,
+		};
+		switch (command.kind) {
+			case "add":
+				return { kind: "prompt", text: buildAddPrompt(command.requirement, draft) };
+			case "edit": {
+				const target = splitEditTarget(command.rest);
+				if (target === null) return { kind: "error", text: `no watchdog named at the start of "${command.rest}" (see /watchdog list)` };
+				const found = findByName(target.name);
+				if (found.kind === "error") return found;
+				let current: string;
+				try {
+					current = readFileSync(found.spec.filePath, "utf8");
+				} catch (error) {
+					return { kind: "error", text: `cannot read ${found.spec.filePath}: ${error instanceof Error ? error.message : String(error)}` };
+				}
+				return { kind: "prompt", text: buildEditPrompt(found.spec, current, target.change, draft) };
+			}
+		}
+	};
+
+	/** `/watchdog rm`: delete the file after the user confirms, and drop this session's override of it. */
+	const remove = async (name: string, ctx: ExtensionContext): Promise<{ readonly level: "info" | "error"; readonly text: string }> => {
+		refresh(false);
+		const found = findByName(name);
+		if (found.kind === "error") return { level: "error", text: found.text };
+		const spec = found.spec;
+		const confirmed = await ctx.ui.confirm(`Delete watchdog "${spec.name}"?`, `${describe(spec)}\n\nThe file is deleted from disk.`);
+		if (!confirmed) return { level: "info", text: `watchdog "${spec.name}" kept` };
+		try {
+			unlinkSync(spec.filePath);
+		} catch (error) {
+			return { level: "error", text: `cannot delete ${spec.filePath}: ${error instanceof Error ? error.message : String(error)}` };
+		}
+		if (overrides.delete(spec.filePath)) pi.appendEntry<SessionOverride>(OVERRIDE_ENTRY_TYPE, { filePath: spec.filePath, enabled: null });
+		refresh(false);
+		return { level: "info", text: `watchdog "${spec.name}" deleted (${spec.filePath})` };
+	};
+
+	const toggle = (command: Extract<WatchdogCommand, { kind: "toggle" }>): { readonly level: "info" | "error"; readonly text: string } => {
+		const found = findByName(command.name);
+		if (found.kind === "error") return { level: "error", text: found.text };
+		const spec = found.spec;
 		const enabled = command.toggle === "on";
 		switch (command.scope) {
 			case "session": {
@@ -969,7 +1331,7 @@ export default function watchdogAgent(pi: ExtensionAPI): void {
 	};
 
 	pi.registerCommand("watchdog", {
-		description: "List watchdogs or switch one on/off for this session or globally: /watchdog [list] | on|off <name> [session|global]",
+		description: "List, add, edit, remove or switch watchdogs: /watchdog [list] | add <requirement> | edit <name> [change] | rm <name> | on|off <name> [session|global]",
 		getArgumentCompletions: prefix => {
 			refresh(false);
 			const lower = prefix.toLowerCase();
@@ -978,23 +1340,39 @@ export default function watchdogAgent(pi: ExtensionAPI): void {
 					{ value: "list", label: "list", description: "all watchdog files and their state" },
 					{ value: "on ", label: "on", description: "switch a watchdog on" },
 					{ value: "off ", label: "off", description: "switch a watchdog off" },
+					{ value: "add ", label: "add", description: "draft a new watchdog with the model from a requirement" },
+					{ value: "edit ", label: "edit", description: "revise a watchdog with the model" },
+					{ value: "rm ", label: "rm", description: "delete a watchdog file (asks first)" },
 				];
 				return subs.filter(s => s.value.startsWith(lower));
 			}
 			const sub = lower.split(/\s+/)[0];
-			if (sub !== "on" && sub !== "off") return null;
 			const items: { value: string; label: string; description: string }[] = [];
 			const names = new Set<string>();
 			for (const spec of roster) {
 				if (names.has(spec.name.toLowerCase())) continue;
 				names.add(spec.name.toLowerCase());
-				const scopes: ToggleScope[] = targetsHere(spec) ? ["session", "global"] : ["global"];
-				for (const scope of scopes) {
-					const value = `${sub} ${spec.name} ${scope}`;
-					if (!value.toLowerCase().startsWith(lower)) continue;
-					const now = !targetsHere(spec) ? "not for this session" : effectiveEnabled(spec) ? "now ON" : "now OFF";
-					const where = scope === "session" ? "this session only" : `writes enabled: ${sub === "on"} to the file`;
-					items.push({ value, label: `${spec.name} ${scope}`, description: `${where} · ${now}` });
+				switch (sub) {
+					case "on":
+					case "off": {
+						const scopes: ToggleScope[] = targetsHere(spec) ? ["session", "global"] : ["global"];
+						for (const scope of scopes) {
+							const value = `${sub} ${spec.name} ${scope}`;
+							if (!value.toLowerCase().startsWith(lower)) continue;
+							const now = !targetsHere(spec) ? "not for this session" : effectiveEnabled(spec) ? "now ON" : "now OFF";
+							const where = scope === "session" ? "this session only" : `writes enabled: ${sub === "on"} to the file`;
+							items.push({ value, label: `${spec.name} ${scope}`, description: `${where} · ${now}` });
+						}
+						break;
+					}
+					case "edit":
+					case "rm": {
+						const value = sub === "edit" ? `edit ${spec.name} ` : `rm ${spec.name}`;
+						if (value.toLowerCase().startsWith(lower)) items.push({ value, label: spec.name, description: spec.filePath });
+						break;
+					}
+					default:
+						return null;
 				}
 			}
 			return items;
@@ -1018,24 +1396,67 @@ export default function watchdogAgent(pi: ExtensionAPI): void {
 					ctx.ui.notify(result.text, result.level);
 					return;
 				}
+				case "add":
+				case "edit": {
+					const prompt = draftPrompt(command, ctx);
+					if (prompt.kind === "error") {
+						ctx.ui.notify(prompt.text, "error");
+						return;
+					}
+					// Extension-authored like every injected message here, so user-prompt-inject never mistakes it for the user's words.
+					pi.sendUserMessage(prompt.text, ctx.isIdle() ? { attribution: "agent" } : { deliverAs: "followUp", attribution: "agent" });
+					return;
+				}
+				case "rm": {
+					const result = await remove(command.name, ctx);
+					pi.logger?.info?.(`watchdog command: ${result.text}`);
+					logActive();
+					ctx.ui.notify(result.text, result.level);
+					return;
+				}
 			}
 		},
 	});
 
 	pi.on("session_start", (_event, ctx) => load(ctx));
 	pi.on("session_switch", (_event, ctx) => load(ctx));
-	// Branch and tree moves swap the working transcript: overrides are re-read from the new branch,
-	// every cursor, counter and cap starts over, and findings in flight about the old one are dropped.
+	// Branch and tree moves swap the working transcript: overrides, cursors and cap counts are
+	// re-read from the new branch, and findings in flight about the old one are dropped.
 	pi.on("session_branch", (_event, ctx) => load(ctx));
 	pi.on("session_tree", (_event, ctx) => load(ctx));
+
+	// A write or edit of a WATCHDOG-*.md (the last step of `/watchdog add`, or any hand edit) is
+	// picked up at once, and the tool result tells the model whether the file is recognised.
+	pi.on("tool_result", event => {
+		if (event.isError) return;
+		const files = touchedWatchdogFiles(event.toolName, event.input, cwd);
+		if (files.length === 0) return;
+		refresh(true);
+		logActive();
+		return { content: [...event.content, { type: "text", text: files.map(fileStatus).join("\n") }] };
+	});
+
 	// Compaction starts a new context on the same transcript: only the per-context budget
-	// (`maxPerContext` count and dedupe set) resets. Accumulated actions, the `window` cursor and
+	// (`maxPerContext` count) resets. Accumulated actions, the `window` cursor and
 	// in-flight reviews carry over.
 	pi.on("session_compact", () => {
 		for (const state of states.values()) {
 			state.sent = 0;
-			state.notes.clear();
 		}
+	});
+
+	// `nextTurn` findings wait for a real user prompt: interactive or RPC input that is not a
+	// slash command arms the turn it starts. A subagent has no user, so its next turn delivers.
+	pi.on("input", event => {
+		if (event.source !== "extension" && !event.text.trimStart().startsWith("/")) userTurnArmed = true;
+	});
+	pi.on("before_agent_start", () => {
+		const armed = userTurnArmed;
+		userTurnArmed = false;
+		if (nextTurnQueue.length === 0 || (identity?.kind === "main" && !armed)) return;
+		const content = nextTurnQueue.join("\n\n");
+		nextTurnQueue = [];
+		return { message: { customType: NEXT_TURN_CUSTOM_TYPE, content, display: true, attribution: "agent" } };
 	});
 
 	pi.on("message_end", (event, ctx) => {
@@ -1079,7 +1500,6 @@ export function __testables() {
 		normalizeDelivery,
 		parsePositiveInt,
 		normalizeScope,
-		normalizeNote,
 		discoverWatchdogFiles,
 	};
 }
