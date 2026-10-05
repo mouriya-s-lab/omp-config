@@ -113,7 +113,7 @@ flowchart LR
 | Path | Purpose |
 | --- | --- |
 | `agent/` | Managed harness config. Only listed items are portable; the whole dir is **not**. |
-| `agent/extensions/` | Local TypeScript extensions (the code core). 20 `.ts` (incl. `bro.ts`, the built-in-AI rewrite of the former `pi-bro` plugin, `input-polish.ts`, which polishes the input-box draft on the configured chord (default Ctrl+Enter) and shows the result in an overlay over the input box, where Enter sends it and Esc discards it, `watchdog-agent.ts`, `user-prompt-inject.ts`, which renders the root session's user prompts into `PROMPT-INJECT-*.md` templates and prepends them, request-only, to every model call of the targeted subagents (mentor and discussants by default), `append-system-model.ts`, which appends the `APPEND_SYSTEM_MODEL.md` blocks whose `model`/`provider` regexes match the session's model to the system prompt on every `before_agent_start`, `fork-task.ts`, which seeds native `task` children with a copy of the caller's conversation, `task-split-check.ts`, which blocks main-agent `task` items for `task:low`/`task:mid`/`task:free` that cover more than one topic, and any `task`/`fork_task` call that caps a `task:*` worker's report length, `subagent-todo.ts`, which gives each `task:*` worker its own native `todo` tool that OMP strips from subagents, and `task-completion-judge.ts`, which bounces a `task:low`/`task:mid`/`task:free` worker's first final `yield` once when a model judges the slice unfinished, and once more when it is finished but the worker's todo list still has open items) + `doc-polish.json`/`input-polish.json`/`lang-nag.json` sidecars (`input-polish.json` and `lang-nag.json` are synced both ways; `doc-polish.json` is machine-local/prompt-overridable — see Important Files). |
+| `agent/extensions/` | Local TypeScript extensions (the code core). 19 `.ts` (incl. `bro.ts`, the built-in-AI rewrite of the former `pi-bro` plugin, `input-polish.ts`, which polishes the input-box draft on the configured chord (default Ctrl+Enter) and shows the result in an overlay over the input box, where Enter sends it and Esc discards it, `watchdog-agent.ts`, `user-prompt-inject.ts`, which renders the root session's user prompts into `PROMPT-INJECT-*.md` templates and prepends them, request-only, to every model call of the targeted subagents (mentor and discussants by default), `append-system-model.ts`, which appends the `APPEND_SYSTEM_MODEL.md` blocks whose `model`/`provider` regexes match the session's model to the system prompt on every `before_agent_start`, `fork-task.ts`, which seeds native `task` children with a copy of the caller's conversation, `task-split-check.ts`, which blocks main-agent `task` items for `task:low`/`task:mid`/`task:free` that cover more than one topic, and any `task`/`fork_task` call that caps a `task:*` worker's report length, `subagent-todo.ts`, which gives each `task:*` worker its own native `todo` tool that OMP strips from subagents, and `task-completion-judge.ts`, which bounces a `task:low`/`task:mid`/`task:free` worker's first final `yield` once when a model judges the slice unfinished, and once more when it is finished but the worker's todo list still has open items) + `doc-polish.json`/`input-polish.json`/`lang-nag.json` sidecars (`input-polish.json` and `lang-nag.json` are synced both ways; `doc-polish.json` is machine-local/prompt-overridable — see Important Files). |
 | `agent/extensions-last/` | Extensions that must run after every other path-loaded extension, loaded by path as the last `config.yml` `extensions` entry (`~/.omp/agent/extensions-last/system-prompt-replace.ts`); `README.md` there documents load order and is repo-only. Holds `system-prompt-replace.ts`, which applies the `system-prompt-replace.json` rules (`literal` or `regex` + `replace`) to the system prompt on every `before_agent_start`, main session and subagents; it rewrites built-in tool descriptions that conflict with `APPEND_SYSTEM.md`. Excluded in light mode by `config-light.yml`'s `extensions` override. `*.ts` there are synced both ways like `extensions/*.ts`. |
 | `agent/system-prompt-replace.json` | Agent-root replacement rules for `system-prompt-replace.ts`. Portable regular item in both directions (field-level diff and edit; validate with `JSON.parse`). Read per prompt, so edits apply without restart; a rule whose target is absent from the main session's system prompt raises a visible warning (UI notification, or stderr when headless) once per rule per process. |
 | `agent/agents/` | Custom subagent definitions (`*.md`) + `README.txt` authoring pitfalls. |
@@ -192,7 +192,7 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
 - **Imports:** type-only `ExtensionAPI`/`ExtensionContext`; runtime imports from
   `@oh-my-pi/pi-coding-agent` (`createAgentSession`, `SessionManager`, `z`,
   `getAgentDir`, ...), `@oh-my-pi/pi-natives` (`glob`/`grep`), `@oh-my-pi/pi-ai`
-  (usage types and the native `TypeSafeJudge`/`isJudgmentApi` used by
+  (the `DeveloperMessage` type used by `user-prompt-inject.ts` and the native `TypeSafeJudge`/`isJudgmentApi` used by
   `watchdog-agent.ts`), `@oh-my-pi/pi-tui`, `@oh-my-pi/pi-utils`. Extensions
   resolve only omp's host packages (`pi-agent-core`, `pi-ai`, `pi-coding-agent`,
   `pi-natives`, `pi-tui`, `pi-utils`); other `@oh-my-pi/*` packages such as
@@ -259,8 +259,8 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
   description into the system prompt.
 - `agent/config-light.yml` — declarative light-mode config overlay: disables twelve
   optional behavior extensions (including `task-completion-judge` and
-  `user-prompt-inject`); the other eight (`append-system-model`, `bro`, `input-polish`, `repo-rules`,
-  `subagent-todo`, and three compatibility fixes) stay loaded, as listed in `README.md`.
+  `user-prompt-inject`); the other seven (`append-system-model`, `bro`, `input-polish`, `repo-rules`,
+  `subagent-todo`, and two compatibility fixes) stay loaded, as listed in `README.md`.
   It overrides `extensions` to `[~/.claude]` to drop `system-prompt-replace.ts`:
   `disabledExtensions` only filters discovered `extension-module:<name>` entries,
   never `config.yml` path entries. Re-check this override whenever `config.yml`
@@ -293,13 +293,17 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
   `doc-polish.json` wins over this one. **Distinct** from `ctx`
   `.md`/`.json` sidecar artifacts.
 - `install-plugins.sh` — declared plugin list: `pi-commandcode-provider`,
-  `pi-package-search`, `pi-unified-exec`, `pi-pretty-codeblocks`, `pi-schedule`, and
+  `pi-package-search`, `pi-pretty-codeblocks`, `pi-schedule`, and
   the GitHub URLs `mouriya-s-lab/pi-bansos` (our fork of npm `pi-bansos`, carrying
-  fixes also submitted upstream to `mannnrachman/pi-bansos`), `Mouriya-Emma/omp-thinking-translator`
+  fixes also submitted upstream to `mannnrachman/pi-bansos`), `mouriya-s-lab/omp-unified-exec`
+  (our fork of `iamwrm/pi-unified-exec`, renamed, which skips the Pi-only compact codemode
+  fix whose `createCodemodeExtension` import fails to link on OMP; its `fork-features/README.md`
+  records the customizations and upstream status), `Mouriya-Emma/omp-thinking-translator`
   (its runtime config is the portable agent-root `thinking-translator.json` above), and
   `mouriya-s-lab/omp-codex-image-gen`. All unpinned: `omp install` resolves npm versions,
   and GitHub URLs track the default branch (re-run the same `omp install <url>` to update). An existing
-  npm `pi-bansos` install must be removed with `omp plugin uninstall pi-bansos` before installing the fork URL.
+  npm `pi-bansos` install must be removed with `omp plugin uninstall pi-bansos` before installing the fork URL,
+  and an existing `pi-unified-exec` with `omp plugin uninstall pi-unified-exec` (both register the same tools).
   The former `pi-bro` plugin is now the local `agent/extensions/bro.ts`.
 - `plugin-audit.sh` — drift report; base commit `5974c4fa`; requires `omp` on PATH
   and a git worktree.
@@ -335,7 +339,8 @@ three light assets alone does not make `omp-light` resolvable.
 - **Harness/runtime is Bun-based** (`omp`). Extensions run under it; validation
   one-liners use `bun -e` (e.g. `Bun.YAML.parse`, `JSON.parse`). Most extensions
   use Node built-ins + Web APIs; Bun-specific code is `unified-exec-bun-pty.ts`
-  (gated to `darwin` + `arm64` for `pi-unified-exec` PTY support) and
+  (gated to `darwin` + `arm64` for `omp-unified-exec` PTY support; it only reaches a plugin
+  installed under `~/.omp/plugins/node_modules`, not one linked from a local path) and
   `append-system-model.ts`, which parses headers with `Bun.YAML.parse`.
 - **Plugins:** installed with `omp install` (network) into `~/.omp/plugins/`
   (`package.json`, `bun.lock`, `node_modules/`, `omp-plugins.lock.json`). These are

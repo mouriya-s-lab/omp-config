@@ -809,7 +809,7 @@ function preparePty(): SetupResult {
 	if (!located) {
 		return {
 			kind: "failed",
-			reason: `${PTY_PACKAGE}@0.13.1 is not installed; install the pi-unified-exec plugin first`,
+			reason: `${PTY_PACKAGE}@0.13.1 is not installed; install the omp-unified-exec plugin first`,
 		};
 	}
 	const cacheRoot = nativeBuildRoot(located.metadata);

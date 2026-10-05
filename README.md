@@ -153,12 +153,14 @@ flowchart LR
 
 插件包是运行时状态，不进仓库（仓库只收 `pi-bansos` 的状态文件，见[手动迁移](#手动迁移)）。`install-plugins.sh` 声明插件列表，并对每一项执行 `omp install`：
 
-- npm：`pi-commandcode-provider`、`pi-package-search`、`pi-unified-exec`、`pi-pretty-codeblocks`、`pi-schedule`。
-- GitHub：`mouriya-s-lab/pi-bansos`、`Mouriya-Emma/omp-thinking-translator`、`mouriya-s-lab/omp-codex-image-gen`。
+- npm：`pi-commandcode-provider`、`pi-package-search`、`pi-pretty-codeblocks`、`pi-schedule`。
+- GitHub：`mouriya-s-lab/pi-bansos`、`mouriya-s-lab/omp-unified-exec`、`Mouriya-Emma/omp-thinking-translator`、`mouriya-s-lab/omp-codex-image-gen`。
 
 所有插件都不钉版本：npm 包由 OMP 解析当前版本，GitHub URL 跟随默认分支，重复执行可能升级插件。结果写进 `~/.omp/plugins/`（`package.json`、`bun.lock`、`node_modules/`、`omp-plugins.lock.json`）。脚本需要联网，会下载并加载第三方代码。
 
 `pi-bansos` 用的是 `mouriya-s-lab` 的 fork，其中的修复也提交给了上游。本机已经装了 npm 版 `pi-bansos` 时，要先 `omp plugin uninstall pi-bansos`，再装 fork。
+
+`omp-unified-exec` 是 `mouriya-s-lab` 对 `iamwrm/pi-unified-exec` 的 fork，提供 `exec_command`、`write_stdin` 等工具。上游 0.12.1 起直接导入 pi 的 `createCodemodeExtension`，OMP 没有 codemode，插件校验失败、装不上；fork 改成宿主没有这个导出时跳过这项显示优化，并把包名改成 `omp-unified-exec`。定制清单、同步方式和上游 PR 的状态记在 fork 仓库的 `fork-features/README.md`。本机装着 `pi-unified-exec` 时，要先 `omp plugin uninstall pi-unified-exec`，再装 fork：两者注册同名工具。
 
 `./plugin-audit.sh` 只读，从基准提交 `5974c4fa` 起收集 `install-plugins.sh` 里出现过的插件，和 `omp plugin list` 对比后分类。它读的都是已提交的版本（`git show <commit>:install-plugins.sh`，“当前列表”取 `HEAD`），而 `./install-plugins.sh` 运行的是工作区里的文件，所以改了插件列表要先提交再跑 audit。`/update-omp` 按分类行动：
 
@@ -220,7 +222,7 @@ git status --short
 
 - 用 `APPEND_SYSTEM_LIGHT.md` 代替完整的追加提示词。
 - 按 `config-light.yml` 禁用 12 个行为扩展：`ctx-post-compact-hint`、`ctx-tasklog`、`ctx-tool`、`doc-polish`、`fork-task`、`isolation-nudge`、`lang-nag`、`task-completion-judge`、`task-split-check`、`tool-policy-nag`、`user-prompt-inject`、`watchdog-agent`。
-- 其余 8 个扩展照常加载：`append-system-model`、`bro`、`input-polish`、`repo-rules`、`subagent-todo`，以及三个兼容性修复（`commandcode-model-spec`、`commandcode-usage`、`unified-exec-bun-pty`）。`APPEND_SYSTEM_MODEL.md` 因此在轻量模式下照样注入。
+- 其余 7 个扩展照常加载：`append-system-model`、`bro`、`input-polish`、`repo-rules`、`subagent-todo`，以及两个兼容性修复（`commandcode-model-spec`、`unified-exec-bun-pty`）。`APPEND_SYSTEM_MODEL.md` 因此在轻量模式下照样注入。
 - `config-light.yml` 把 `extensions` 覆盖成只有 `~/.claude`，去掉 `config.yml` 末项的 [system-prompt-replace](#system-prompt-replace)。`disabledExtensions` 只过滤按模块名发现的扩展，管不到 `config.yml` 里按路径加载的项，所以只能这样排除。`config.yml` 的 `extensions` 以后增删 `~/.claude` 之外的项时，要同步判断 `config-light.yml` 是否跟着改。
 - 插件、rules、skills、上下文文件，以及 model、thinking、profile、auth、session 设置都不变。被禁用扩展注册的工具（`ctx`、`polish_doc`、`fork_task`）在轻量模式下不存在。
 - `omp-light` 从 agent 目录读 `config-light.yml` 和 `APPEND_SYSTEM_LIGHT.md`：设置了 `PI_CODING_AGENT_DIR` 时用它，否则用 `~/.omp/agent`。缺任何一个就直接退出，不回退到别的目录。
@@ -322,7 +324,6 @@ harness 会把 `APPEND_SYSTEM.md` 和每个 agent 的 `description` 都注入主
 |[bro](#bro)|`/bro`：把回复、文档或网页改写成易懂的解释|是|
 |[input-polish](#input-polish)|`Ctrl+Enter` 润色输入框草稿，overlay 预览后回车发送、Esc 取消|是|
 |[commandcode-model-spec](#commandcode-model-spec)|修复 `--model` 指定 commandcode 模型时的认证失败|是|
-|[commandcode-usage](#commandcode-usage)|显示 Command Code 额度|是|
 |[unified-exec-bun-pty](#unified-exec-bun-pty)|让 `exec_command` 在 darwin-arm64 上支持 `tty: true`|是|
 
 ### 行为约束
@@ -561,12 +562,16 @@ model: "(gpt-5|o3)"
 - 每条规则 `literal`、`regex` 二选一，再加 `replace`；其他键、空匹配串、无效正则都让整个文件不生效。
 - `literal` 替换所有出现处，`replace` 里的 `$` 没有特殊含义。`regex` 自动加 `g`，`replace` 按 `String.prototype.replace` 解释 `$1`、`$&`。
 - 规则按文件顺序依次作用于每个 system prompt 块，后一条看到的是前一条替换后的结果。
-- 仓库里的规则（都是改 OMP 内置 prompt 里的句子）：
+- 仓库里的规则（改的都是 OMP 内置 prompt 或插件工具说明里的句子）：
   - `task` 工具那句换成 “Always set \`agent\` explicitly; never rely on the default.”，和 `APPEND_SYSTEM.md` 要求写明 agent 一致。默认 agent 名用正则匹配，所以 `spawns` 不同、默认 agent 不同的 subagent 也能命中。
   - `task` 的 `model` 参数说明 “Omit unless a specific model is needed.” 换成 “Omit unless the user explicitly asks for a specific model.”。
   - `todo` 的 “Before work, init for 3+ steps, …” 换成：动手前就 `init`，任何多步工作都要；改动按 context 记录、经 `ctx` 读回；列表跟随当前范围而不是最初的计划，工作一变（新的或修改的指令、计划变化、发现要增删步骤）就立即 `append`、`rm`/`drop` 或重新 `init`。
   - Engineering 的 “NEVER rerun checks to confirm them.” 换成 “NEVER rerun checks to doubt them. Reproducing to locate the cause and confirming the fix still apply.”：用户报的问题不用复跑去怀疑，但为定位原因复现、修完确认仍要做，和 Workflow 的 “reproduce before; confirm after” 不再冲突。
   - “Compiled code: NEVER avoidable allocation, …” 补上谓语 `add`。
+  - `eval` 工具说明末尾 “On error, retry only the failed step; …” 之后追加一段：拒绝用 `eval` 调查文件。读内容（`open`、`Path.read_text`、`Bun.file`、`readFileSync`、prelude 的 `read()`）、列目录或找文件（`os.listdir`、`os.walk`、`glob.glob`、`readdirSync`）、搜文本（对文件内容跑正则、`subprocess` 调 `cat`/`ls`/`find`/`grep`/`rg`）都归 `read`、`glob`、`grep`；随手看一眼、批量处理多个文件、少调几次工具都不算例外。`eval` 只用于对已拿到的数据做计算、转换、结构化解析和库调用。`APPEND_SYSTEM.md` 的 Tool Call 一节有同类规则，但 subagent 收不到附录，工具说明里这段对所有带 `eval` 的会话生效。
+  - `exec_command`（`omp-unified-exec` 插件，挂在 `xd://` 下，system prompt 里只有截断的摘要）的开头句 “Run a command in a persistent session.” 之后插入两段。插在开头句后面而不是摘要末尾，是因为摘要按长度截断，末尾的文字进不了 system prompt。
+    - 拒绝用它调查文件：读内容（`cat`、`head`、`tail`、`sed -n`、`less`）、列目录或找文件（`ls`、`find`、`fd`、`tree`）、搜文本（`grep`、`rg`、`ag`、`awk`），不管单独跑、放进管道还是包在 `python -c` / `node -e` / `bun -e` 里，都归 `read`、`glob`、`grep`；随手看一眼、批量处理、少调几次工具都不算例外。它只留给真正的二进制程序和简短的事实型管道：构建、测试、git、外部 CLI、计数、校验和。
+    - 交互式操作用 `tty: true` 启动、用 `write_stdin` 驱动：`ssh` 会话，密码、口令和 host-key 提示，REPL 和数据库 shell，TUI，以及通过真实 TUI 测试 harness 或 CLI；管道、heredoc、`yes |` 都不能代替终端。不要过早轮询 TTY：启动程序或发送输入后，把 `yield_time_ms` 设到能覆盖预期响应的长度（shell 提示符或 `ssh` 登录几秒，harness 里一轮模型回复 20–30 秒），等这个窗口过了还没出现预期的提示或输出，才发空轮询；程序还在干活时连着轮询，只会拿到画了一半的屏幕，白白浪费轮次。
 - 关于某个工具怎么用的规则，优先改写该工具的说明，而不是写进 `APPEND_SYSTEM.md`：subagent 收不到附录，但能看到工具说明，规则只写一处就覆盖所有会话。附录只保留编排逻辑，并要求遵守 `todo` 工具的规则。
 - 改写工具说明依赖 `config.yml` 的 `inlineToolDescriptors: "on"`：打开时完整工具说明都写进 system prompt。默认的 `auto` 只对 Gemini 这样做，`off` 一律不做；不写进 system prompt、又走原生 tool calling 时，system prompt 只列工具名，说明随 `tools[]` 发送，这类规则就失效了。
 - 内置 prompt 的规则句常省略主语，以覆盖所有场景；改写时保持这种写法，只补意思，不加明确主语。
@@ -760,15 +765,11 @@ overlay 里上下键或滚轮滚动，`C` 复制到系统剪贴板，`R` 重新�
 - **做法**：只在 `session_start` 检查一次，把当前模型重新选回插件的 `commandcode-custom`，成功时提示一行（交互模式用 UI 通知，headless 写 stderr）。不注册 provider，不改默认模型和缓存。
 - **限制**：判断依据是 agent 目录下的 `commandcode-models.json`（可用 `COMMANDCODE_MODELS_CACHE` 改路径）。这个文件不迁移，而且每个进程只读一次：新机器上插件写出它之后，要重启 OMP 才起作用。这是绕过，不是根治；根因在宿主持久化扩展 provider 时丢了自定义 `api`，`omp models commandcode refresh` 也不会改这些行。
 
-#### commandcode-usage
-
-`commandcode-usage.ts` 为 `pi-commandcode-provider` 注册用量 provider，调用 Command Code billing endpoint（`https://api.commandcode.ai/alpha/billing/credits`，15 秒超时），显示 5 小时和每周额度，并附上月度、购买和免费余额。复用插件的凭据解析；会话开始时注册，结束时移除（已被别的 provider 替换时不动）。不注册模型 provider。
-
 #### unified-exec-bun-pty
 
-`unified-exec-bun-pty.ts` 让 `pi-unified-exec` 的 `exec_command` 在 macOS Apple Silicon（`darwin-arm64`）上支持 `tty: true`。其他平台不加载 PTY 适配。
+`unified-exec-bun-pty.ts` 让 `omp-unified-exec` 的 `exec_command` 在 macOS Apple Silicon（`darwin-arm64`）上支持 `tty: true`。其他平台不加载 PTY 适配。
 
-扩展加载时就准备 `pi-unified-exec` 的可选依赖 `@homebridge/node-pty-prebuilt-multiarch` 的原生绑定，结果缓存在 `~/.omp/unified-exec-bun-pty-binding/<包版本>-darwin-arm64/`（设置了 `PI_CODING_AGENT_DIR` 时换成它的上一级目录）。顺序：
+扩展加载时就准备 `omp-unified-exec` 的可选依赖 `@homebridge/node-pty-prebuilt-multiarch` 的原生绑定，结果缓存在 `~/.omp/unified-exec-bun-pty-binding/<包版本>-darwin-arm64/`（设置了 `PI_CODING_AGENT_DIR` 时换成它的上一级目录）。兼容层把替换后的 PTY 模块放进 `~/.omp/plugins/node_modules` 的模块缓存，所以插件必须从 GitHub 或 npm 安装到这个目录下。用本地路径 `omp install <目录>` 装的是软链接，插件会从源码目录解析 PTY 包，兼容层管不到，`tty: true` 会失败。顺序：
 
 1. 缓存里的绑定能在 Bun 里加载，就直接用。
 2. 缓存目录里有失败标记 `build-failure.txt` 时不再重试，要删掉标记或整个目录才会重来。缓存里已有但在 Bun 里加载不了的 `pty.node` / `spawn-helper` 也会挡住后续下载和构建的结果写入，这种情况要删掉整个缓存目录。
