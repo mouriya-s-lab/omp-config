@@ -2,7 +2,7 @@
   "enabled": true,
   "targetLanguage": "Simplified Chinese",
   "translatorModel": {
-    "provider": "futureppo",
+    "provider": "futureppo-pool",
     "id": "ministral-14b-latest"
   },
   "trace": false
