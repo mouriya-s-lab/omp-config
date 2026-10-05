@@ -15,6 +15,8 @@ plugins=(
   'pi-schedule'
   'https://github.com/Mouriya-Emma/omp-thinking-translator'
   'https://github.com/mouriya-s-lab/omp-codex-image-gen'
+  # 可选，默认不装：不是谁都需要远端构建环境，且依赖太多（omp-unified-exec、Mutagen、km CLI、Komodo Core/Periphery、可 SSH 的构建主机）。需要时加上引号取消注释。
+  # https://github.com/mouriya-s-lab/omp-remote-build
 )
 
 for plugin in "${plugins[@]}"; do

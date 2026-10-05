@@ -305,8 +305,13 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
   npm `pi-bansos` install must be removed with `omp plugin uninstall pi-bansos` before installing the fork URL,
   and an existing `pi-unified-exec` with `omp plugin uninstall pi-unified-exec` (both register the same tools).
   The former `pi-bro` plugin is now the local `agent/extensions/bro.ts`.
+  `mouriya-s-lab/omp-remote-build` is listed commented out and unquoted as an optional
+  plugin: not everyone needs remote build environments, and it depends on `omp-unified-exec`,
+  Mutagen, the km CLI, Komodo Core/Periphery and an SSH-reachable build host. `/sync-omp-config`
+  keeps commented entries commented even when the plugin is installed locally.
 - `plugin-audit.sh` — drift report; base commit `5974c4fa`; requires `omp` on PATH
-  and a git worktree.
+  and a git worktree. It counts only single-quoted entries inside `plugins=( … )`, so a
+  commented optional plugin that is installed locally reports as `[保留]`.
 - `.omp/commands/{update-omp,sync-omp-config,migrate-omp-keys}.md` — the command
   contracts; read these for exact copy/exclusion/validation rules.
 
