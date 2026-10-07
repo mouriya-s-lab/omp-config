@@ -17,6 +17,7 @@ description: 用本仓库快照更新本机 OMP 配置和 pi-bansos 状态（rep
 | `agent/config.yml` | 同名 | 只改有差异的字段；`/sync-omp-config` 列出的本机字段不动 |
 | `agent/settings.json` | 同名 | 只改有差异的字段 |
 | `agent/APPEND_SYSTEM.md` | 同名 | 直接覆盖 |
+| `agent/CODING_STANDARDS.md` | 同名 | 直接覆盖 |
 | `agent/APPEND_SYSTEM_MODEL.md` | 同名 | 直接覆盖；仓库没有时不动本机 |
 | `agent/PROMPT-INJECT-*.md` | 同名 | 直接覆盖；本机多出来的模板不删 |
 | `agent/thinking-translator.json` | 同名 | 只改有差异的字段 |

@@ -26,6 +26,7 @@ Oh My Pi（OMP）配置中可以审查、可以迁移的部分，为重型编程
 |`agent/extensions/`|本地扩展，以及 `lang-nag.json`、`input-polish.json`、`doc-polish.json` 三个扩展配置|`~/.omp/agent/extensions/`|
 |`pi/agent/pi-bansos-relay-state.json`|`pi-bansos` 插件状态|`~/.pi/agent/`|
 |`install-plugins.sh`、`plugin-audit.sh`|插件安装、插件漂移检查|—|
+|`agent/CODING_STANDARDS.md`|按需读取的 OMP 扩展、结构化配置与自定义 agent 编写、验证规则|`~/.omp/agent/CODING_STANDARDS.md`|
 |`.omp/commands/`|三个维护命令的完整规则|—|
 
 ## 快速上手
@@ -125,7 +126,7 @@ flowchart LR
 |项目|处理方式|
 |---|---|
 |`config.yml`、`settings.json`、`thinking-translator.json`、`extensions/lang-nag.json`、`extensions/input-polish.json`|按字段合并|
-|`APPEND_SYSTEM.md`、`APPEND_SYSTEM_MODEL.md`、`PROMPT-INJECT-*.md`|直接覆盖；仓库没有的 `APPEND_SYSTEM_MODEL.md`、本机多出来的模板都不删|
+|`APPEND_SYSTEM.md`、`CODING_STANDARDS.md`、`APPEND_SYSTEM_MODEL.md`、`PROMPT-INJECT-*.md`|直接覆盖；仓库没有的 `APPEND_SYSTEM_MODEL.md`、本机多出来的模板都不删|
 |`agents/`|`diff -rq` 确认范围后覆盖；和 `config.yml` 里的模型绑定一起更新，避免 agent 名和模型对不上|
 |`extensions/*.ts`|同名覆盖、缺的补齐；本机多出来的扩展不删|
 |轻量模式三项资产|复制到 `~/.omp/agent`，并安装入口，见[轻量模式](#轻量模式)|
@@ -140,7 +141,7 @@ flowchart LR
 
 只读本机，不写 `~/.omp`、`~/.pi`、`omp` 安装目录、PATH 或 shell 配置，本机文件的 mtime 前后不变。
 
-- **范围**：`config.yml`、`settings.json`、`APPEND_SYSTEM.md`、`APPEND_SYSTEM_MODEL.md`、`thinking-translator.json`、`PROMPT-INJECT-*.md`、轻量模式三项资产、`agents/`、`extensions/*.ts`、`extensions/lang-nag.json`、`extensions/input-polish.json`，以及 `~/.pi/agent/pi-bansos-relay-state.json`。
+- **范围**：`config.yml`、`settings.json`、`APPEND_SYSTEM.md`、`CODING_STANDARDS.md`、`APPEND_SYSTEM_MODEL.md`、`thinking-translator.json`、`PROMPT-INJECT-*.md`、轻量模式三项资产、`agents/`、`extensions/*.ts`、`extensions/lang-nag.json`、`extensions/input-polish.json`，以及 `~/.pi/agent/pi-bansos-relay-state.json`。
 - **不收回**：安装到 `omp` 旁边的 `omp-light` / `omp-light.cmd`（轻量模式三项只从 `~/.omp/agent` 取）；`extensions/doc-polish.json`。
 - 本机没有 `pi-bansos-relay-state.json`（从没用 `/bansos` 改过设置）时，不算“本机已删除”，仓库保持原样。
 - `~/.omp/plugins/package.json` 的依赖和 `install-plugins.sh` 不一致时，重写脚本里的插件列表：URL/Git 依赖原样保留，npm 依赖去掉版本号。
@@ -176,7 +177,7 @@ GitHub URL 的插件名按 URL 最后一段推断，仓库名和包名不同时�
 ```bash
 mkdir -p "$HOME/.omp/agent"
 cp agent/config.yml agent/settings.json agent/APPEND_SYSTEM.md \
-  agent/thinking-translator.json agent/PROMPT-INJECT-*.md \
+  agent/CODING_STANDARDS.md agent/thinking-translator.json agent/PROMPT-INJECT-*.md \
   agent/config-light.yml agent/APPEND_SYSTEM_LIGHT.md agent/omp-light.ts \
   "$HOME/.omp/agent/"
 cp -a agent/agents agent/extensions "$HOME/.omp/agent/"
@@ -243,28 +244,29 @@ subagent 分三类：`task:*` 执行，`discuss:*` 只读讨论，`mentor:defaul
 |某个 agent 的职责（`description`）和它自己的角色提示（正文）|`agent/agents/<name>.md`|
 |注入给某些 agent 的用户原话模板|`agent/PROMPT-INJECT-*.md`，见 [user-prompt-inject](#user-prompt-inject)|
 |模型、推理强度、运行开关、禁用入口|`agent/config.yml`|
+|OMP 扩展、结构化配置与自定义 agent 约定（仅相关任务读取）|`agent/CODING_STANDARDS.md`|
 
-harness 会把 `APPEND_SYSTEM.md` 和每个 agent 的 `description` 都注入主 agent，所以两处不写重复内容。subagent 收不到 `APPEND_SYSTEM.md`，它需要的规则写在自己的定义里。
+主 agent 会收到 `APPEND_SYSTEM.md` 和各 agent 的 `description`，所以两处不重复职责。任务子代理不会继承 `APPEND_SYSTEM.md` 或项目根目录的 `AGENTS.md`；执行代码的 agent 定义要求它在改动前读取目标仓库的 `AGENTS.md`，并按其中的触发条件读取标准文档。需要传给下一层 worker 的项目规则也必须写入派发 brief。
 
 改 agent 定义前先读 `agent/agents/README.txt`，里面是实测过的陷阱：`spawns` 的默认值、`task.disabledAgents` 里的名字即使列进 allowlist 也派不出去、递归深度上限、只有 `yield` 的 agent 会丢答案、目录里的非 agent `.md` 会被当成定义解析等。改动在下次派发时生效，不用重启；已经在跑的 subagent 不受影响。
 
 ### 分档
 
-下表第二列是各 agent `description` 里的说法，也就是主 agent 看到的档次与成本；实际模型在 `config.yml` 的 `task.agentModelOverrides`。换模型不改变 agent 的职责，但要同步它 `description` 里和本表中的档次与成本。
+档次表示执行契约与可信度，不保证具体模型。实际模型和 fallback 只看 `config.yml` 的 `task.agentModelOverrides`；切换路由不改 agent 职责。
 
-|名称|`description` 里的档次与成本（每 1M token，综合）|可派发|用途|
+|名称|执行契约|可派发|用途|
 |---|---|---|---|
-|`task:high`|Claude Opus 5.5，约 0.45 USD|全部 `task:*`、两个 discussant、mentor|必须一次做对，或更便宜的档次裁决不了的工作；负责所派子批次的契约、验收与集成|
-|`task:mid`|Opus 级，约 0.3 USD|mentor|默认档次：委派的实现、调查、调试和验证；也裁决便宜档次之间的冲突|
-|`task:low`|Opus 级，约 0.01 USD|mentor|成本优先、结果可以直接交付的工作：批量机械改动、查询、例行检查；也负责验证 `task:free` 的结果|
-|`task:free`|Opus 级，零成本，并发几乎不限|mentor|结果不需要独立验证的工作：找候选代码或文档、列方案、探索性试验|
+|`task:high`|可在父级契约内做局部设计、拆分并集成自己的子批次|全部 `task:*`、两个 discussant、mentor|需要切片内协调、局部设计或一层委派的工作|
+|`task:mid`|不委派；可咨询 mentor|mentor|有界实现、调查、调试和验证；契约变化交回父级|
+|`task:low`|默认非委派执行层；可咨询 mentor|mentor|有界实现和验证；也独立验证会被采信的 `task:free` 结果|
+|`task:free`|低信任、零成本候选层；不委派 worker|mentor|线索、候选和探针；结果由调用方读取或另行验证|
 |`discuss:divergent`|—|—|发散视角：找问题边界之外的替代方案及其代价|
 |`discuss:steady`|—|—|保守视角：查风险、隐藏假设、遗漏状态和更简单的方案|
 |`mentor:default`|—|—|无工具导师：调查前审计划，调查后核对证据和遗漏|
 
 ### 派发规则
 
-- **按成本和所需可信度选档次，不按难度选。** 默认派 `task:mid`；成本比多出的判断力更重要时（批量机械改动、查询、验证 `task:free`）降到 `task:low`。验证也算成本：需要验证才能采信的结果，用 `task:free` 加验证者比 `task:low` 做一次更贵。进仓库的改动、会被直接采信的结论和裁决都给 `task:low` 及以上。`task:free` 的结果不能互相验证。
+- **按权限、可信度和当前路由选档次，不按名称猜模型质量。** 默认派 `task:low`；需要切片内协调或一层委派时用 `task:high`；适合当前 `task:mid` 路由且不需要委派时可选 `task:mid`。进仓库的改动、会被直接采信的结论和裁决都给 `task:low` 及以上。`task:free` 只做低影响候选和探针，不能互相验证。
 - **`task:free`、`task:low`、`task:mid` 不接设计和核心工作**：架构、领域类型与状态模型、接口与跨切片契约、改动的核心逻辑，以及文档、prompt、skill、agent 定义的设计。`task:high` 没有这条限制。
 - **核心代码、小改动和文档设计由当前负责人自己写**，不交给任何 `task:*`。小改动按整件工作判断：写派工单不比直接改省事，就自己改。
 - **其余工作切成最小、各有验收标准的单元，一次并行派出。** 单元能并行的条件：各有验收标准、启动不依赖其他单元的输出、文件和状态归属不重叠。只因接口或文件边界没定而不满足的，先定边界再并行。确实拆不开的，主 agent 交给一个 worker，worker 则自己做。

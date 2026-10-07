@@ -28,8 +28,6 @@ task:
     task:free: "bansos/muse-spark-1.3-contributor:xhigh, opencode-go/muse-spark-1.3-contributor:xhigh, openai-codex/gpt-6-luna:max"
     sonic: openai-codex/gpt-6-luna:max
     task: openai-codex/gpt-6-luna:max
-  agentPrewalk:
-    {}
   isolation:
     enabled: true
   enableLsp: false
