@@ -158,7 +158,7 @@ flowchart LR
 - 不删文件，也不删结构化配置里的键：工作区没有“上次应用的提交”可以对比。
 - 不改写 `.omp-config-applied`。自动更新开着时，下次启动只要默认分支的提交与记录不同，就会覆盖手动应用的内容；改动推送并合并后再启动，两边就一致了。
 - 用 `./plugin-audit.sh` 找出 `[卸载候选]`，询问后卸载；缺失的插件由更新器补装。
-- 本机初始化项已存在就不动，缺失时先问用户是否创建、内容填什么，没确认就跳过并在报告里说明：`extensions/doc-polish.json`、[unified-exec-bun-pty](#unified-exec-bun-pty) 需要的 PTY 原生包缓存、[commandcode-model-spec](#commandcode-model-spec) 依赖的 `commandcode-models.json`。自动更新从不创建它们。
+- 本机初始化项已存在就不动，缺失时先问用户是否创建、内容填什么，没确认就跳过并在报告里说明：`extensions/doc-polish.json`、[commandcode-model-spec](#commandcode-model-spec) 依赖的 `commandcode-models.json`。自动更新从不创建它们。
 
 完成后报告改了哪些文件、装卸了哪些插件、哪些项因等待确认被跳过，并提醒重启 OMP。`pi-bansos-relay-state.json` 在已运行的会话里要到下次会话启动，或下一次用 `/bansos` 修改时才生效。
 
@@ -185,7 +185,7 @@ flowchart LR
 
 `pi-bansos` 用的是 `mouriya-s-lab` 的 fork，其中的修复也提交给了上游。本机已经装了 npm 版 `pi-bansos` 时，要先 `omp plugin uninstall pi-bansos`，再装 fork。
 
-`omp-unified-exec` 是 `mouriya-s-lab` 对 `iamwrm/pi-unified-exec` 的 fork，提供 `exec_command`、`write_stdin` 等工具。上游 0.12.1 起直接导入 pi 的 `createCodemodeExtension`，OMP 没有 codemode，插件校验失败、装不上；fork 改成宿主没有这个导出时跳过这项显示优化，并把包名改成 `omp-unified-exec`。定制清单、同步方式和上游 PR 的状态记在 fork 仓库的 `fork-features/README.md`。本机装着 `pi-unified-exec` 时，要先 `omp plugin uninstall pi-unified-exec`，再装 fork：两者注册同名工具。
+`omp-unified-exec` 是 `mouriya-s-lab` 对 `iamwrm/pi-unified-exec` 的 fork，提供 `exec_command`、`write_stdin` 等工具。上游 0.12.1 起直接导入 pi 的 `createCodemodeExtension`，OMP 没有 codemode，插件校验失败、装不上；fork 改成宿主没有这个导出时跳过这项显示优化，并把包名改成 `omp-unified-exec`。在 Bun 1.4 及以上版本中，TTY 由 Bun 原生 `Terminal` 实现，macOS、Linux、Windows 共用同一后端；在 Node.js 中才按需加载 `@homebridge/node-pty-prebuilt-multiarch`。定制清单和同步方式记在 fork 仓库的 `fork-features/README.md`。本机装着 `pi-unified-exec` 时，要先 `omp plugin uninstall pi-unified-exec`，再装 fork：两者注册同名工具。
 
 `./plugin-audit.sh` 只读，从基准提交 `5974c4fa` 起收集 `install-plugins.sh` 里出现过的插件，和 `omp plugin list` 对比后分类。它只认插件列表里带单引号的条目，注释掉的可选插件不算登记，本机装了也归 `[保留]`。它读的都是已提交的版本（`git show <commit>:install-plugins.sh`，“当前列表”取 `HEAD`），而 `./install-plugins.sh` 运行的是工作区里的文件，所以改了插件列表要先提交再跑 audit。仓库 → 本机按分类处理：
 
@@ -244,7 +244,7 @@ git status --short
 
 - 用 `APPEND_SYSTEM_LIGHT.md` 代替完整的追加提示词。
 - 按 `config-light.yml` 禁用 12 个行为扩展：`ctx-post-compact-hint`、`ctx-tasklog`、`ctx-tool`、`doc-polish`、`fork-task`、`isolation-nudge`、`lang-nag`、`task-completion-judge`、`task-split-check`、`tool-policy-nag`、`user-prompt-inject`、`watchdog-agent`。
-- 其余 8 个扩展照常加载：`append-system-model`、`bro`、`input-polish`、`repo-rules`、`subagent-todo`、[omp-config-autoupdate](#omp-config-autoupdate)，以及两个兼容性修复（`commandcode-model-spec`、`unified-exec-bun-pty`）。`APPEND_SYSTEM_MODEL.md` 因此在轻量模式下照样注入；自动更新开着时，用 `omp-light` 启动也会更新。
+- 其余 7 个扩展照常加载：`append-system-model`、`bro`、`input-polish`、`repo-rules`、`subagent-todo`、[omp-config-autoupdate](#omp-config-autoupdate)，以及兼容性修复 `commandcode-model-spec`。`APPEND_SYSTEM_MODEL.md` 因此在轻量模式下照样注入；自动更新开着时，用 `omp-light` 启动也会更新。
 - `config-light.yml` 把 `extensions` 覆盖成只有 `~/.claude`，去掉 `config.yml` 末项的 [system-prompt-replace](#system-prompt-replace)。`disabledExtensions` 只过滤按模块名发现的扩展，管不到 `config.yml` 里按路径加载的项，所以只能这样排除。`config.yml` 的 `extensions` 以后增删 `~/.claude` 之外的项时，要同步判断 `config-light.yml` 是否跟着改。
 - 插件、rules、skills、上下文文件，以及 model、thinking、profile、auth、session 设置都不变。被禁用扩展注册的工具（`ctx`、`polish_doc`、`fork_task`）在轻量模式下不存在。
 - `omp-light` 从 agent 目录读 `config-light.yml` 和 `APPEND_SYSTEM_LIGHT.md`：设置了 `PI_CODING_AGENT_DIR` 时用它，否则用 `~/.omp/agent`。缺任何一个就直接退出，不回退到别的目录。
@@ -346,7 +346,6 @@ harness 会把 `APPEND_SYSTEM.md` 和每个 agent 的 `description` 都注入主
 |[bro](#bro)|`/bro`：把回复、文档或网页改写成易懂的解释|是|
 |[input-polish](#input-polish)|`Ctrl+Enter` 润色输入框草稿，overlay 预览后回车发送、Esc 取消|是|
 |[commandcode-model-spec](#commandcode-model-spec)|修复 `--model` 指定 commandcode 模型时的认证失败|是|
-|[unified-exec-bun-pty](#unified-exec-bun-pty)|让 `exec_command` 在 darwin-arm64 上支持 `tty: true`|是|
 |[omp-config-autoupdate](#omp-config-autoupdate)|启动时从 GitHub 默认分支自动更新本机配置；默认关闭，`/omp-config-autoupdate on\|off` 开关|是|
 
 ### 行为约束
@@ -808,40 +807,6 @@ overlay 里上下键或滚轮滚动，`C` 复制到系统剪贴板，`R` 重新�
 - **做法**：只在 `session_start` 检查一次，把当前模型重新选回插件的 `commandcode-custom`，成功时提示一行（交互模式用 UI 通知，headless 写 stderr）。不注册 provider，不改默认模型和缓存。
 - **限制**：判断依据是 agent 目录下的 `commandcode-models.json`（可用 `COMMANDCODE_MODELS_CACHE` 改路径）。这个文件不迁移，而且每个进程只读一次：新机器上插件写出它之后，要重启 OMP 才起作用。这是绕过，不是根治；根因在宿主持久化扩展 provider 时丢了自定义 `api`，`omp models commandcode refresh` 也不会改这些行。
 
-#### unified-exec-bun-pty
-
-`unified-exec-bun-pty.ts` 让 `omp-unified-exec` 的 `exec_command` 在 macOS Apple Silicon（`darwin-arm64`）上支持 `tty: true`。其他平台不加载 PTY 适配。
-
-扩展加载时就准备 `omp-unified-exec` 的可选依赖 `@homebridge/node-pty-prebuilt-multiarch` 的原生绑定，结果缓存在 `~/.omp/unified-exec-bun-pty-binding/<包版本>-darwin-arm64/`（设置了 `PI_CODING_AGENT_DIR` 时换成它的上一级目录）。兼容层把替换后的 PTY 模块放进 `~/.omp/plugins/node_modules` 的模块缓存，所以插件必须从 GitHub 或 npm 安装到这个目录下。用本地路径 `omp install <目录>` 装的是软链接，插件会从源码目录解析 PTY 包，兼容层管不到，`tty: true` 会失败。顺序：
-
-1. 缓存里的绑定能在 Bun 里加载，就直接用。
-2. 缓存目录里有失败标记 `build-failure.txt` 时不再重试，要删掉标记或整个目录才会重来。缓存里已有但在 Bun 里加载不了的 `pty.node` / `spawn-helper` 也会挡住后续下载和构建的结果写入，这种情况要删掉整个缓存目录。
-3. 先准备构建输入（已安装包旁的 `node-addon-api`、`binding.gyp`、`src/unix/pty.cc`、`src/unix/spawn-helper.cc`）。缺了就直接失败并写失败标记，不会去下载。
-4. 用 `prebuild-install` 下载预编译包，依次尝试当前 Node 版本和 24、22、20、18 的 ABI，选能在 Bun 里加载的；每次尝试单独限时 120 秒。
-5. 都不行才用 `node-gyp` 源码构建，超时 120 秒。这些步骤在扩展加载时依次同步执行，没有总时限。
-
-失败时在会话开始时记 warning，兼容层跳过。
-
-要手动预置时：
-
-```bash
-pty_package_dir="$HOME/.omp/plugins/node_modules/@homebridge/node-pty-prebuilt-multiarch"
-pty_version="$(node -p "require(process.argv[1]).version" "$pty_package_dir/package.json")"
-node_abi=137  # 示例值：从 release 里选实际存在、当前 Bun 能加载的 darwin-arm64 资源
-pty_archive="$HOME/Downloads/node-pty-prebuilt-multiarch-v${pty_version}-node-v${node_abi}-darwin-arm64.tar.gz"
-pty_root="$HOME/.omp/unified-exec-bun-pty-binding/${pty_version}-darwin-arm64"
-
-mkdir -p "$HOME/Downloads" "$pty_root"
-curl -fL \
-  "https://github.com/homebridge/node-pty-prebuilt-multiarch/releases/download/v${pty_version}/node-pty-prebuilt-multiarch-v${pty_version}-node-v${node_abi}-darwin-arm64.tar.gz" \
-  -o "$pty_archive"
-tar -xzf "$pty_archive" -C "$pty_root"
-rm -f "$pty_root/build-failure.txt"
-```
-
-- 版本号取已安装包的 `package.json`；`node_abi` 不能直接用 Bun 的 ABI，要从 [release 页面](https://github.com/homebridge/node-pty-prebuilt-multiarch/releases)选。
-- 解压后必须有 `build/Release/pty.node` 和 `build/Release/spawn-helper`，且 `pty.node` 要能在 Bun 里加载。
-- 归档解到 `~/.omp/unified-exec-bun-pty-binding/` 下，不要解到 `extensions/`。
 
 ## 维护须知
 

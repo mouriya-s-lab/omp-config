@@ -142,7 +142,7 @@ flowchart LR
 | Path | Purpose |
 | --- | --- |
 | `agent/` | Managed harness config. Only listed items are portable; the whole dir is **not**. |
-| `agent/extensions/` | Local TypeScript extensions (the code core). 20 `.ts` (incl. `omp-config-autoupdate.ts`, which, when switched on with `/omp-config-autoupdate on` (off by default), runs `omp-config-update.ts auto` as a child process once per process from the root session's `session_start` and reports the result, `bro.ts`, the built-in-AI rewrite of the former `pi-bro` plugin, `input-polish.ts`, which polishes the input-box draft on the configured chord (default Ctrl+Enter) and shows the result in an overlay over the input box, where Enter sends it and Esc discards it, `watchdog-agent.ts`, `user-prompt-inject.ts`, which renders the root session's user prompts into `PROMPT-INJECT-*.md` templates and prepends them, request-only, to every model call of the targeted subagents (mentor and discussants by default), `append-system-model.ts`, which appends the `APPEND_SYSTEM_MODEL.md` blocks whose `model`/`provider` regexes match the session's model to the system prompt on every `before_agent_start`, `fork-task.ts`, which seeds native `task` children with a copy of the caller's conversation, `task-split-check.ts`, which blocks main-agent `task` items for `task:low`/`task:mid`/`task:free` that cover more than one topic, and any `task`/`fork_task` call that caps a `task:*` worker's report length, `subagent-todo.ts`, which gives each `task:*` worker its own native `todo` tool that OMP strips from subagents, and `task-completion-judge.ts`, which bounces a `task:low`/`task:mid`/`task:free` worker's first final `yield` once when a model judges the slice unfinished, and once more when it is finished but the worker's todo list still has open items) + `doc-polish.json`/`input-polish.json`/`lang-nag.json` sidecars (`input-polish.json` and `lang-nag.json` are synced both ways; `doc-polish.json` is machine-local/prompt-overridable — see Important Files). |
+| `agent/extensions/` | Local TypeScript extensions (the code core). 19 `.ts` (incl. `omp-config-autoupdate.ts`, which, when switched on with `/omp-config-autoupdate on` (off by default), runs `omp-config-update.ts auto` as a child process once per process from the root session's `session_start` and reports the result, `bro.ts`, the built-in-AI rewrite of the former `pi-bro` plugin, `input-polish.ts`, which polishes the input-box draft on the configured chord (default Ctrl+Enter) and shows the result in an overlay over the input box, where Enter sends it and Esc discards it, `watchdog-agent.ts`, `user-prompt-inject.ts`, which renders the root session's user prompts into `PROMPT-INJECT-*.md` templates and prepends them, request-only, to every model call of the targeted subagents (mentor and discussants by default), `append-system-model.ts`, which appends the `APPEND_SYSTEM_MODEL.md` blocks whose `model`/`provider` regexes match the session's model to the system prompt on every `before_agent_start`, `fork-task.ts`, which seeds native `task` children with a copy of the caller's conversation, `task-split-check.ts`, which blocks main-agent `task` items for `task:low`/`task:mid`/`task:free` that cover more than one topic, and any `task`/`fork_task` call that caps a `task:*` worker's report length, `subagent-todo.ts`, which gives each `task:*` worker its own native `todo` tool that OMP strips from subagents, and `task-completion-judge.ts`, which bounces a `task:low`/`task:mid`/`task:free` worker's first final `yield` once when a model judges the slice unfinished, and once more when it is finished but the worker's todo list still has open items) + `doc-polish.json`/`input-polish.json`/`lang-nag.json` sidecars (`input-polish.json` and `lang-nag.json` are synced both ways; `doc-polish.json` is machine-local/prompt-overridable — see Important Files). |
 | `agent/extensions-last/` | Extensions that must run after every other path-loaded extension, loaded by path as the last `config.yml` `extensions` entry (`~/.omp/agent/extensions-last/system-prompt-replace.ts`); `README.md` there documents load order and is repo-only. Holds `system-prompt-replace.ts`, which applies the `system-prompt-replace.json` rules (`literal` or `regex` + `replace`) to the system prompt on every `before_agent_start`, main session and subagents; it rewrites built-in tool descriptions that conflict with `APPEND_SYSTEM.md`. Excluded in light mode by `config-light.yml`'s `extensions` override. `*.ts` there are synced both ways like `extensions/*.ts`. |
 | `agent/system-prompt-replace.json` | Agent-root replacement rules for `system-prompt-replace.ts`. Portable regular item in both directions (field-level diff and edit; validate with `JSON.parse`). Read per prompt, so edits apply without restart; a rule whose target is absent from the main session's system prompt raises a visible warning (UI notification, or stderr when headless) once per rule per process. |
 | `agent/agents/` | Custom subagent definitions (`*.md`) + `README.txt` authoring pitfalls. |
@@ -292,9 +292,9 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
   description into the system prompt.
 - `agent/config-light.yml` — declarative light-mode config overlay: disables twelve
   optional behavior extensions (including `task-completion-judge` and
-  `user-prompt-inject`); the other eight (`append-system-model`, `bro`, `input-polish`, `repo-rules`,
-  `subagent-todo`, `omp-config-autoupdate`, and two compatibility fixes) stay loaded, as listed in `README.md`,
-  so `omp-light` also auto-updates when the switch is on.
+  `user-prompt-inject`); the other seven (`append-system-model`, `bro`, `input-polish`, `repo-rules`,
+  `subagent-todo`, `omp-config-autoupdate`, and the `commandcode-model-spec` compatibility fix) stay loaded,
+  as listed in `README.md`, so `omp-light` also auto-updates when the switch is on.
   It overrides `extensions` to `[~/.claude]` to drop `system-prompt-replace.ts`:
   `disabledExtensions` only filters discovered `extension-module:<name>` entries,
   never `config.yml` path entries. Re-check this override whenever `config.yml`
@@ -347,8 +347,10 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
   the GitHub URLs `mouriya-s-lab/pi-bansos` (our fork of npm `pi-bansos`, carrying
   fixes also submitted upstream to `mannnrachman/pi-bansos`), `mouriya-s-lab/omp-unified-exec`
   (our fork of `iamwrm/pi-unified-exec`, renamed, which skips the Pi-only compact codemode
-  fix whose `createCodemodeExtension` import fails to link on OMP; its `fork-features/README.md`
-  records the customizations and upstream status), `Mouriya-Emma/omp-thinking-translator`
+  fix whose `createCodemodeExtension` import fails to link on OMP, uses Bun's native `Terminal`
+  on macOS, Linux, and Windows under Bun, and loads `@homebridge/node-pty-prebuilt-multiarch`
+  only under Node.js; its `fork-features/README.md` records the customizations and sync policy),
+  `Mouriya-Emma/omp-thinking-translator`
   (its runtime config is the portable agent-root `thinking-translator.json` above), and
   `mouriya-s-lab/omp-codex-image-gen`. All unpinned: `omp install` resolves npm versions,
   and GitHub URLs track the default branch (re-run the same `omp install <url>` to update). An existing
@@ -395,18 +397,17 @@ restart, whose first automatic apply (no `.omp-config-applied` yet) installs
 
 - **Harness/runtime is Bun-based** (`omp`). Extensions run under it; validation
   one-liners use `bun -e` (e.g. `Bun.YAML.parse`, `JSON.parse`). Most extensions
-  use Node built-ins + Web APIs; Bun-specific code is `unified-exec-bun-pty.ts`
-  (gated to `darwin` + `arm64` for `omp-unified-exec` PTY support; it only reaches a plugin
-  installed under `~/.omp/plugins/node_modules`, not one linked from a local path) and
-  `append-system-model.ts`, which parses headers with `Bun.YAML.parse`, and the
-  updater `omp-config-update.ts` (`Bun.YAML`, `Bun.which`, `Bun.deepEquals`,
-  `import.meta.main`); its startup hook needs `bun` on `PATH` to spawn it.
+  use Node built-ins + Web APIs; `append-system-model.ts` uses `Bun.YAML.parse`
+  for its headers, and the updater `omp-config-update.ts` uses `Bun.YAML`,
+  `Bun.which`, `Bun.deepEquals`, and `import.meta.main`; its startup hook needs
+  `bun` on `PATH` to spawn it. `omp-unified-exec` owns its PTY backend: Bun's native
+  `Terminal` on macOS, Linux, and Windows, and
+  `@homebridge/node-pty-prebuilt-multiarch` only under Node.js.
 - **Plugins:** installed with `omp install` (network) into `~/.omp/plugins/`
   (`package.json`, `bun.lock`, `node_modules/`, `omp-plugins.lock.json`). These are
   machine state, not repo content.
-- **Agent dir:** `~/.omp/agent`. The PTY native cache sits one level above it. The
-  updater's clone (`~/.omp/omp-config-src`) and lock dir
-  (`~/.omp/omp-config-update.lock`) sit there too.
+- **Agent dir:** `~/.omp/agent`. The updater's clone (`~/.omp/omp-config-src`) and
+  lock dir (`~/.omp/omp-config-update.lock`) sit one level above it.
 - The installed `omp-light` entry is not stored in `~/.omp/agent`: it is
   placed beside the resolved `omp` executable so the existing `PATH` finds it.
 - **Restart required:** `APPEND_SYSTEM.md`, extensions, and plugins take effect on

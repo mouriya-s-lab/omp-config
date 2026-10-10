@@ -18,7 +18,7 @@ description: 用本仓库工作区更新本机 OMP 配置和 pi-bansos 状态（
 
    agent 目录默认取 `PI_CODING_AGENT_DIR`，否则 `~/.omp/agent`；使用 named profile 时加 `--agent-dir <omp config path 的输出>`。脚本报告 `another update holds …` 时，说明有一次自动更新正在进行，稍后重跑。
 2. 跑 `./plugin-audit.sh`，只处理 `[卸载候选]`：问用户是否 `omp plugin uninstall <name>`，并告知作者从脚本移除通常已经验证过，可以直接删。`[安装]` 已由脚本补装，`[保留]` 不动。
-3. 本机初始化项（`extensions/doc-polish.json`、`unified-exec-bun-pty` 的 PTY 原生包缓存、`commandcode-model-spec` 依赖的 `commandcode-models.json`）脚本不碰。已存在就不动；缺失时问用户是否创建、内容填什么，未确认就跳过并在报告里说明。
+3. 本机初始化项（`extensions/doc-polish.json`、`commandcode-model-spec` 依赖的 `commandcode-models.json`）脚本不碰。已存在就不动；缺失时问用户是否创建、内容填什么，未确认就跳过并在报告里说明。
 4. 报告脚本输出的写入、删除、跳过（应用托管文件）、补装的插件、note 和 error，以及卸载结果和初始化项的处理。
 
 ## 手动更新与自动更新的差别
