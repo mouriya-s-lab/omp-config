@@ -312,8 +312,11 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
   invalid = off), which neither the updater nor `/sync-omp-config` carries, and
   which is read once per start. When on, the hook spawns the installed updater with
   `bun` from a managed `ctx.setTimeout` (an in-process fault must not take OMP
-  down) and notifies only on changes or failures. `auto` takes the lock dir
-  `~/.omp/omp-config-update.lock`, fetches into `~/.omp/omp-config-src`, then
+  down) and notifies only on changes or failures (up to date, a busy lock, and
+  a failed fetch only log). `auto` takes
+  the lock dir `~/.omp/omp-config-update.lock`, fetches into
+  `~/.omp/omp-config-src` (a failed fetch, first clone included, applies
+  nothing and returns `offline`), then
   imports `applySnapshot` from the fetched clone's copy of the updater, so a
   commit is applied by its own rules; keep `applySnapshot(options)`
   backward-compatible. The marker `<agent dir>/.omp-config-applied` is written

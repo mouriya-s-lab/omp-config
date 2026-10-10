@@ -7,8 +7,11 @@
 //   auto   Run by extensions/omp-config-autoupdate.ts at OMP start when the
 //          machine's switch is on (`/omp-config-autoupdate on`; off by default).
 //          Refreshes the updater-owned clone (~/.omp/omp-config-src) from
-//          origin, and applies only when its commit differs from the commit
-//          last applied to this agent dir (`<agent dir>/.omp-config-applied`).
+//          origin, and applies only when the fetch succeeds and its commit
+//          differs from the commit last applied to this agent dir
+//          (`<agent dir>/.omp-config-applied`). A failed fetch (offline)
+//          applies nothing: the clone is a copy of origin as of the last
+//          fetch, never a stand-in for it.
 //          The apply code is imported from the freshly fetched clone, so a
 //          commit that changes apply rules is applied by its own rules.
 //   apply  Run by /update-omp against a working checkout (`--source`).
@@ -151,8 +154,9 @@ export interface ApplyReport {
 
 export type AutoResult =
 	| { readonly kind: "busy" }
-	| { readonly kind: "up-to-date"; readonly commit: string; readonly fetchError: string | undefined }
-	| { readonly kind: "applied"; readonly commit: string; readonly fetchError: string | undefined; readonly report: ApplyReport }
+	| { readonly kind: "offline"; readonly error: string }
+	| { readonly kind: "up-to-date"; readonly commit: string }
+	| { readonly kind: "applied"; readonly commit: string; readonly report: ApplyReport }
 	| { readonly kind: "failed"; readonly error: string };
 
 // --- small helpers ----------------------------------------------------------
@@ -597,6 +601,8 @@ function lockHolderAlive(): boolean {
 }
 
 function acquireLock(): boolean {
+	// ~/.omp may not exist yet (agent dir elsewhere); a missing parent is not a held lock.
+	mkdirSync(dirname(LOCK_DIR), { recursive: true });
 	for (let attempt = 0; attempt < 2; attempt++) {
 		try {
 			mkdirSync(LOCK_DIR);
@@ -628,7 +634,7 @@ function releaseLock(): void {
 
 const CLONE_DIR = join(homedir(), ".omp", "omp-config-src");
 
-/** Fetch `branch` into the updater-owned clone; returns the fetch error, if any. */
+/** Fetch `branch` into the updater-owned clone; returns the clone or fetch error, if any. */
 function refreshClone(branch: string): string | undefined {
 	if (!existsSync(CLONE_DIR)) {
 		const tmp = `${CLONE_DIR}.tmp-${process.pid}`;
@@ -636,7 +642,7 @@ function refreshClone(branch: string): string | undefined {
 		const cloned = spawnSync("git", ["clone", "--quiet", "--depth", "1", "--branch", branch, REPO_URL, tmp], { encoding: "utf8" });
 		if (cloned.status !== 0) {
 			rmSync(tmp, { recursive: true, force: true });
-			throw new Error(`git clone failed: ${(cloned.stderr || cloned.error?.message || "").trim()}`);
+			return `git clone failed: ${(cloned.stderr || cloned.error?.message || "").trim()}`;
 		}
 		renameSync(tmp, CLONE_DIR);
 		return undefined;
@@ -656,12 +662,13 @@ export async function runAuto(agentDir: string, branch: string): Promise<AutoRes
 	if (!acquireLock()) return { kind: "busy" };
 	try {
 		const fetchError = refreshClone(branch);
+		if (fetchError !== undefined) return { kind: "offline", error: fetchError };
 		const head = git(CLONE_DIR, ["rev-parse", "HEAD"]);
 		if (!head.ok) return { kind: "failed", error: head.err };
 		const commit = head.out.trim();
 		const markerPath = join(agentDir, APPLIED_MARKER);
 		const applied = existsSync(markerPath) ? readFileSync(markerPath, "utf8").trim() : "";
-		if (applied === commit) return { kind: "up-to-date", commit, fetchError };
+		if (applied === commit) return { kind: "up-to-date", commit };
 		const previousCommit = applied && git(CLONE_DIR, ["cat-file", "-e", `${applied}^{commit}`]).ok ? applied : undefined;
 		// Apply with the fetched commit's own rules. Dynamic import is required:
 		// the module is the just-fetched clone's copy, chosen at runtime, not this file.
@@ -672,7 +679,7 @@ export async function runAuto(agentDir: string, branch: string): Promise<AutoRes
 		const report = await fetched.applySnapshot({ source: CLONE_DIR, agentDir, previousCommit, check: false, plugins: true });
 		if (applied && previousCommit === undefined) report.notes.push(`previous commit ${applied} unavailable, no deletions`);
 		if (report.errors.length === 0) atomicWrite(markerPath, `${commit}\n`);
-		return { kind: "applied", commit, fetchError, report };
+		return { kind: "applied", commit, report };
 	} catch (error) {
 		return { kind: "failed", error: errorText(error) };
 	} finally {
