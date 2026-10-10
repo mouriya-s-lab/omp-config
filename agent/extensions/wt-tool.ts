@@ -80,18 +80,18 @@ const IDLE_POLL_MS = 50;
 const LIST_LIMIT = 50;
 
 const CREATE_DESCRIPTION = [
-	"Run the user's `/wt` command for this session: fork the current git checkout into a new linked worktree on `branch` (default `wt/<yyyymmdd-hhmmss>`), carry uncommitted changes along, and move this session (cwd and session file) into it.",
-	"The command is the same one the user types, so the user's `worktree.*` settings apply, including `worktree.cleanSource` (reset and clean the source checkout after the move) and `worktree.onExit` (what happens to the worktree when the session exits).",
-	"When the session is already in a linked worktree, the call creates nothing: it returns that worktree's details and a `confirm` value. Usually keep working there. Only if you still want a new worktree forked from this one, call again with that `confirm` value.",
-	"`/wt` cannot run mid-turn: a call that creates only queues it. End your turn right after such a call, without further tool calls; the command runs once the session is idle, and its outcome (new cwd, summary, or the error the user saw) arrives as the next message.",
-	"Available only in the main session of the interactive TUI.",
+	"Create a new git worktree for this session and move the session into it: a new branch `branch` (default `wt/<yyyymmdd-hhmmss>`) at the current HEAD, uncommitted changes carried along; the session's cwd becomes the new worktree.",
+	"Use this tool for session worktrees; never create, switch to, or remove worktrees yourself with `git worktree` or by changing directories.",
+	"If the session is already in a worktree, nothing is created: you get that worktree's path, branch, HEAD, uncommitted changes, and a `confirm` value. Keep working there unless you really need another worktree branched from it; then call again with that `confirm` value.",
+	"The worktree is created after your turn ends: end your turn right after a call that creates, without further tool calls. The result (new path and branch, or the error) arrives as the next message.",
 ].join("\n");
 
 const REMOVE_DESCRIPTION = [
-	"Remove the linked git worktree this session is in and move the session to the repository's main checkout. The branch is always kept.",
-	"Two calls. First call it without `confirm`: it only checks, changes nothing, and reports whether removal is safe, every staged, unstaged, untracked and ignored file removal would delete, the branch commits not in the main checkout, anything that blocks removal, and a `confirm` value.",
-	"Judge the report yourself. To go ahead, call it again with that `confirm` value; it is valid only while the worktree is exactly as reported. The removal is queued: end your turn right after the call, without further tool calls. Once the session is idle the worktree is checked again, the session moves to the main checkout (the user's `/move`), the worktree is checked a last time and removed; any change or blocker stops it. The outcome arrives as the next message.",
-	"Available only in the main session of the interactive TUI.",
+	"Remove the worktree this session is in and move the session back to the repository's main checkout. The branch is kept.",
+	"Use this tool to leave a session worktree; never remove or leave worktrees yourself with `git worktree` or by changing directories.",
+	"Call it twice. First without `confirm`: a dry run that changes nothing and reports whether removal is safe, every staged, unstaged, untracked and ignored file it would delete, branch commits not in the main checkout, anything blocking removal, and a `confirm` value.",
+	"Read the report and decide. To remove, call again with that `confirm` value; it only works while the worktree is exactly as reported, so any change in it means checking again.",
+	"The removal happens after your turn ends: end your turn right after the confirming call, without further tool calls. It is checked once more first; any change or blocker stops it. The result arrives as the next message.",
 ].join("\n");
 
 const createParams = z.object({
@@ -405,8 +405,8 @@ export default function wtTool(pi: ExtensionAPI): void {
 		const after = mode.sessionManager.getCwd();
 		pi.logger.info("wt: queued /wt ran", { before, after, moved: after !== before });
 		return after !== before
-			? `\`/wt\` ran and moved this session from \`${before}\` to \`${after}\`. Continue the task there. What /wt showed the user:\n${describeShown(shown)}`
-			: `\`/wt\` ran but did not move this session; it is still in \`${before}\`. What /wt showed the user:\n${describeShown(shown)}`;
+			? `New worktree created; this session moved from \`${before}\` to \`${after}\`. Continue the task there.\n${describeShown(shown)}`
+			: `No worktree was created; the session is still in \`${before}\`.\n${describeShown(shown)}`;
 	};
 
 	const runRemove = async (ctx: ExtensionContext, mode: InteractiveModeContext, check: WorktreeCheck): Promise<string> => {
@@ -589,7 +589,7 @@ export default function wtTool(pi: ExtensionAPI): void {
 			}
 			state = { kind: "queued", request: { kind: "create", sessionId: ctx.sessionManager.getSessionId(), branch } };
 			return text(
-				`Queued \`/wt${branch ? ` ${branch}` : ""}\`. It runs once this turn ends, exactly as if the user typed it. End your turn now without further tool calls; the outcome arrives as the next message.`,
+				`Queued: a new worktree${branch ? ` on branch \`${branch}\`` : ""} is created once this turn ends. End your turn now without further tool calls; the outcome arrives as the next message.`,
 			);
 		},
 	});
