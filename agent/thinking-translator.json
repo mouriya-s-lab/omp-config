@@ -3,8 +3,22 @@
   "targetLanguage": "Simplified Chinese",
   "translatorModels": [
     {
-      "provider": "bansos",
-      "id": "muse-spark-1.3-contributor-free",
+      "provider": "futureppo-pool",
+      "id": "ministral-14b-latest"
+    },
+    {
+      "provider": "commandcode",
+      "id": "linclusionai/ling-3.1-flash:free",
+      "effort": "low"
+    },
+    {
+      "provider": "commandcode",
+      "id": "poolside/laguna-s-2.1-free",
+      "effort": "minimal"
+    },
+    {
+      "provider": "commandcode",
+      "id": "stealth/glyph-cluster:free",
       "effort": "minimal"
     }
   ],
