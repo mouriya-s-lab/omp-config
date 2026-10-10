@@ -790,6 +790,7 @@ overlay 里上下键或滚轮滚动，`C` 复制到系统剪贴板，`R` 重新�
   2. 用户按 Esc 中断的那一轮结束时取消请求：UI 弹提示，模型在下一轮看到“什么都没变”的说明。
   3. 会话切换或退出时丢弃请求。
 - **执行人的命令时**：请求原样交给输入框提交时用的分发器 `executeBuiltinSlashCommand`，人用这些命令时的行为全部照旧。执行期间临时替换 TUI 实例的 `showError`、`showWarning`、`showStatus`、`present`，照常显示，同时记下文字回传给模型。这次命令不进人的输入历史（上箭头），不清空人正在输入的草稿，不计入斜杠命令使用统计，也不经过其他扩展的 `input` 钩子。
+- **工具说明**：两个工具的说明只讲功能，并要求模型只用这两个工具进出会话的 worktree，不自己跑 `git worktree` 或切目录。
 - **回传**：结果作为 custom 消息（`attribution: "agent"`）发出并开启新一轮。
 - **拿到 TUI 实例**：扩展 API 不暴露 InteractiveMode。TUI 下 `ctx.ui.setEditorComponent` 以 InteractiveMode 实例为 `this` 调用它的原型方法；扩展在这一次同步调用里把原型方法换成只记录 `this` 的函数，调用完立即恢复，编辑器不会真被替换。拿不到实例、会话不符或处于 collab guest 时，工具调用直接返回错误，不登记请求。
 
