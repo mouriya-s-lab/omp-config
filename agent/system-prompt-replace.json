@@ -17,10 +17,6 @@
       "replace": "Before touching anything, init for any multi-step work, requested task sets, or new instructions; every change is logged per context and read back through `ctx`. The list tracks the current scope, not the first plan: the moment the work changes — new or revised instructions, a changed plan, findings that add or remove steps — update it (append, rm/drop, or re-init)."
     },
     {
-      "literal": "Omit unless a specific model is needed.",
-      "replace": "Omit unless the user explicitly asks for a specific model."
-    },
-    {
       "literal": "On error, retry only the failed step; earlier steps may have taken effect.",
       "replace": "On error, retry only the failed step; earlier steps may have taken effect.\nRefuse to investigate files through `eval`: reading content (`open`, `Path.read_text`, `Bun.file`, `readFileSync`, the prelude `read()`), listing or finding files (`os.listdir`, `os.walk`, `glob.glob`, `readdirSync`), and searching text (regex over file content, `subprocess` running `cat`/`ls`/`find`/`grep`/`rg`) belong to `read`, `glob` and `grep`. A quick look, many files at once, or fewer tool calls are not exceptions. `eval` starts only where the work needs language semantics on data already in hand: computation, transforms, structured parsing, library calls."
     },
