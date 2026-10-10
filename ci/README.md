@@ -77,7 +77,7 @@ session 阶段的每一项都是一条诊断：
 - 没有任何 assistant 回复，或超过 300 秒未结束；
 - 进程退出码非 0。
 
-影子代理收到上游 HTTP 400 及以上的响应时，记一条 `provider` 诊断。
+免费模型失败会连带产生别的诊断，它们也记为 `provider`：session 中所有失败回复都符合 R3 条件时，该 session 的 `prompt_result` 未完成和非零退出；omp 日志记录的 `error` 或 `errorMessage` 字段是免费模型服务失败（连接、DNS、超时、限流、5xx）时，该记录。影子代理收到上游 HTTP 400 及以上的响应时，记一条 `provider` 诊断。
 
 检查运行的退出码：有 `config` 或 `environment` 诊断时为 1；只有 `provider` 诊断时为 2；没有诊断时为 0。报告写到 stdout 和 `$GITHUB_STEP_SUMMARY`，在 GitHub Actions 中每条诊断另发一条 `::error` annotation。
 

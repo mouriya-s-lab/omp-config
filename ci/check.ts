@@ -224,10 +224,13 @@ function applyConfig(env: Record<string, string>, cwd: string, out: Diagnostic[]
 	return report;
 }
 
+/** Text of a free-model service failure: transport errors, timeouts, rate limits, 5xx. */
+const PROVIDER_FAILURE = /ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|fetch failed|socket hang up|network|rate limit|\b(?:408|429|5\d\d)\b/i;
+
 function isProviderFailure(message: Mapping): boolean {
 	const status = message.errorStatus;
 	if (typeof status === "number" && (status === 408 || status === 429 || status >= 500)) return true;
-	return /ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|fetch failed|socket hang up|network/i.test(String(message.errorMessage ?? ""));
+	return PROVIDER_FAILURE.test(String(message.errorMessage ?? ""));
 }
 
 /** One RPC session: wait for ready, send one prompt, keep stdin open until prompt_result, then drain. */
@@ -281,22 +284,26 @@ async function runSession(phase: Phase, command: readonly string[], env: Record<
 	for (const line of lines(await stderr)) out.push({ kind: "config", phase, text: line });
 	if (timedOut) out.push({ kind: "config", phase, text: `session did not finish within ${SESSION_TIMEOUT_MS / 1000} s` });
 	if (!promptSent) out.push({ kind: "config", phase, text: "omp exited before the RPC ready frame" });
+	const replies = events.flatMap(event => (event.type === "message_end" && isMapping(event.message) && event.message.role === "assistant" ? [event.message] : []));
+	const failedReplies = replies.filter(reply => reply.stopReason === "error" || reply.stopReason === "aborted");
+	// A prompt that ended badly because the free model failed says nothing about the configuration.
+	const fallout = failedReplies.length > 0 && failedReplies.every(isProviderFailure) ? "provider" : "config";
 	for (const event of events) {
 		if (event.type === "extension_error") out.push({ kind: "config", phase, text: `extension_error in ${event.extensionPath} during ${event.event}: ${event.error}` });
 		if (event.type === "response" && event.id === "ci" && event.success === false) out.push({ kind: "config", phase, text: `prompt rejected: ${event.error}` });
-		if (event.type === "prompt_result" && event.id === "ci" && event.status !== "completed") out.push({ kind: "config", phase, text: `prompt ended with status ${event.status}` });
+		if (event.type === "prompt_result" && event.id === "ci" && event.status !== "completed") out.push({ kind: fallout, phase, text: `prompt ended with status ${event.status}` });
 	}
-	const replies = events.flatMap(event => (event.type === "message_end" && isMapping(event.message) && event.message.role === "assistant" ? [event.message] : []));
+	for (const reply of failedReplies) {
+		const text = `${reply.provider}/${reply.model} reply ${reply.stopReason}${reply.errorStatus ? ` (HTTP ${reply.errorStatus})` : ""}: ${reply.errorMessage}`;
+		out.push({ kind: isProviderFailure(reply) ? "provider" : "config", phase, text });
+	}
 	for (const reply of replies) {
-		if (reply.stopReason === "error" || reply.stopReason === "aborted") {
-			const text = `${reply.provider}/${reply.model} reply ${reply.stopReason}${reply.errorStatus ? ` (HTTP ${reply.errorStatus})` : ""}: ${reply.errorMessage}`;
-			out.push({ kind: isProviderFailure(reply) ? "provider" : "config", phase, text });
-		} else if (reply.provider !== FREE_PROVIDER || reply.model !== FREE_MODEL) {
+		if (!failedReplies.includes(reply) && (reply.provider !== FREE_PROVIDER || reply.model !== FREE_MODEL)) {
 			out.push({ kind: "config", phase, text: `reply came from ${reply.provider}/${reply.model}, not ${FREE_PROVIDER}/${FREE_MODEL}` });
 		}
 	}
 	if (promptSent && !timedOut && replies.length === 0) out.push({ kind: "config", phase, text: "no assistant reply" });
-	if (code !== 0 && !timedOut) out.push({ kind: "config", phase, text: `omp exited ${code}` });
+	if (code !== 0 && !timedOut) out.push({ kind: fallout, phase, text: `omp exited ${code}` });
 }
 
 function readLogs(home: string, out: Diagnostic[], ignored: string[]): void {
@@ -316,7 +323,8 @@ function readLogs(home: string, out: Diagnostic[], ignored: string[]): void {
 			const text = `${level}: ${message}${Object.keys(context).length ? ` ${JSON.stringify(context)}` : ""}`;
 			const host = level === "warn" ? HOST_LOG_WARNINGS.find(rule => rule.match(entry)) : undefined;
 			if (host) ignored.push(`${text} — ${host.reason}`);
-			else out.push({ kind: "config", phase: "omp log", text });
+			// A record whose own error is a free-model service failure is the provider's, not the configuration's.
+			else out.push({ kind: PROVIDER_FAILURE.test(`${entry.error ?? ""} ${entry.errorMessage ?? ""}`) ? "provider" : "config", phase: "omp log", text });
 		}
 	}
 }
