@@ -25,6 +25,9 @@ import { basename, dirname, join, resolve } from "node:path";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
 const PTY_PACKAGE = "@homebridge/node-pty-prebuilt-multiarch";
+// omp-unified-exec requires this entry file, not the bare name: compiled Bun does not
+// read dependency package.json at runtime, so the bare name never resolves.
+const PTY_ENTRY = `${PTY_PACKAGE}/lib/index.js`;
 const PTY_VERSION_FALLBACK = "unknown";
 const NATIVE_CACHE_ROOT_NAME = "unified-exec-bun-pty-binding";
 const READ_POLL_INTERVAL_MS = 50;
@@ -721,9 +724,9 @@ function seedPackageCache(packageDir: string, module: PtyModule): FailedSetup | 
 	const packageRequire = createRequire(join(pluginDir, "package.json"));
 	let entryPath: string;
 	try {
-		entryPath = packageRequire.resolve(PTY_PACKAGE);
+		entryPath = packageRequire.resolve(PTY_ENTRY);
 	} catch (error) {
-		return { kind: "failed", reason: `could not resolve ${PTY_PACKAGE}: ${errorText(error)}` };
+		return { kind: "failed", reason: `could not resolve ${PTY_ENTRY}: ${errorText(error)}` };
 	}
 	if (packageRequire.cache[entryPath] !== undefined) {
 		return { kind: "failed", reason: `${PTY_PACKAGE} was already loaded before the compatibility extension` };
