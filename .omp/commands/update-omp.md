@@ -39,7 +39,7 @@ agent 定义和 `config.yml` 里的模型绑定必须一起更新；只更新一
 - 不删除本机多出来的扩展；仓库删掉的扩展也不在本机卸载。
 - `extensions-last/` 里的扩展由 `config.yml` 的 `extensions` 按路径加载，必须是列表最后一项；不要放进 `extensions/`，否则会被提前加载。
 - 应用托管的文件跳过、不覆盖：首行为 `// @orca-managed-pi-extension`，或任意行含 `marker: _otty`。以标记为准，不凭文件名判断。
-- 本机相关的初始化项（`doc-polish.json`、`unified-exec-bun-pty.ts` 需要的 PTY 原生包缓存、`commandcode-model-spec.ts` 依赖的 `commandcode-models.json`）已存在就不动；缺失时问用户是否创建、内容填什么，未确认就跳过并在报告里说明。
+- 本机相关的初始化项（`doc-polish.json`、`commandcode-model-spec.ts` 依赖的 `commandcode-models.json`）已存在就不动；缺失时问用户是否创建、内容填什么，未确认就跳过并在报告里说明。
 
 ## Light 启动器
 
