@@ -663,7 +663,9 @@ export async function runAuto(agentDir: string, branch: string): Promise<AutoRes
 		const previousCommit = applied && git(CLONE_DIR, ["cat-file", "-e", `${applied}^{commit}`]).ok ? applied : undefined;
 		// Apply with the fetched commit's own rules. Dynamic import is required:
 		// the module is the just-fetched clone's copy, chosen at runtime, not this file.
-		const fetched: { applySnapshot?: typeof applySnapshot } = await import(pathToFileURL(join(CLONE_DIR, "agent", "omp-config-update.ts")).href);
+		const fetchedUpdater = join(CLONE_DIR, "agent", "omp-config-update.ts");
+		if (!existsSync(fetchedUpdater)) return { kind: "failed", error: `${branch} at ${commit.slice(0, 7)} has no agent/omp-config-update.ts; nothing applied` };
+		const fetched: { applySnapshot?: typeof applySnapshot } = await import(pathToFileURL(fetchedUpdater).href);
 		if (typeof fetched.applySnapshot !== "function") return { kind: "failed", error: "fetched omp-config-update.ts exports no applySnapshot" };
 		const report = await fetched.applySnapshot({ source: CLONE_DIR, agentDir, previousCommit, check: false, plugins: true });
 		if (applied && previousCommit === undefined) report.notes.push(`previous commit ${applied} unavailable, no deletions`);
