@@ -8,15 +8,15 @@ description: 把本机 ~/.omp/agent 配置和 pi-bansos 状态同步进本仓库
 
 ## 同步范围
 
-本机 `~/.omp/agent` 与仓库 `agent/` 按同名一一对应：`config.yml`、`settings.json`、`APPEND_SYSTEM.md`、`APPEND_SYSTEM_MODEL.md`、`thinking-translator.json`、`system-prompt-replace.json`、`PROMPT-INJECT-*.md`、`config-light.yml`、`APPEND_SYSTEM_LIGHT.md`、`omp-light.ts`、`agents/`、`extensions/*.ts`、`extensions-last/*.ts`、`extensions/lang-nag.json`、`extensions/input-polish.json`。
+本机 `~/.omp/agent` 与仓库 `agent/` 按同名一一对应：`config.yml`、`settings.json`、`APPEND_SYSTEM.md`、`APPEND_SYSTEM_MODEL.md`、`thinking-translator.json`、`system-prompt-replace.json`、`PROMPT-INJECT-*.md`、`config-light.yml`、`APPEND_SYSTEM_LIGHT.md`、`omp-light.ts`、`omp-config-update.ts`、`agents/`、`extensions/*.ts`、`extensions-last/*.ts`、`extensions/lang-nag.json`、`extensions/input-polish.json`。这个范围与 `agent/omp-config-update.ts` 的 `managedPlain` 和 `STRUCTURED` 一致，改一边就要改另一边。
 
 另有一项不在 `~/.omp/agent` 下：`pi-bansos` 插件的状态文件 `~/.pi/agent/pi-bansos-relay-state.json` 对应仓库 `pi/agent/pi-bansos-relay-state.json`。它由 `/bansos` 命令写入，保存 relay 开关、当前 relay、已存 relay 列表和状态栏显示（`statusBar`），不含凭据。本机没有这个文件时（从未执行过 `/bansos` 的改动类子命令）不算“本机已删除”，仓库保持原样并在报告里说明。
 
 不进仓库：
-- 运行时文件：`*.db*`、`*-wal`、`*-shm`、`*.lock`、`models.yml`、`models.yml.bak-*`、`commandcode-models.json`、`last-changelog-version`、`sessions/`、`terminal-sessions/`、`blobs/`、`cache/`、`logs/`。
+- 运行时文件：`*.db*`、`*-wal`、`*-shm`、`*.lock`、`models.yml`、`models.yml.bak-*`、`commandcode-models.json`、`last-changelog-version`、`sessions/`、`terminal-sessions/`、`blobs/`、`cache/`、`logs/`，以及自动更新的记录 `.omp-config-applied`。
 - `omp` 安装目录里的 `omp-light`、`omp-light.ts`、`omp-light.cmd`；light 三件只从 `~/.omp/agent` 取。
 - 应用托管的扩展：首行为 `// @orca-managed-pi-extension`，或任意位置含 `marker: _otty`。以标记为准，不凭文件名判断。
-- `config.yml` 中的本机字段，仓库保留原值：`providers.webSearchOrder`、`modelRoles`、`defaultThinkingLevel`、`skills`、`symbolPreset`、`theme`、`colorBlindMode`、`hideThinkingBlock`、`statusLine`、`terminal`、`tui`、`display`、`worktree`、`compaction.thresholdTokens`。
+- `config.yml` 中的本机字段，仓库保留原值：即 `agent/omp-config-update.ts` 的 `LOCAL_CONFIG_FIELDS`，自动更新同样不写这些字段。
 
 ## 步骤
 

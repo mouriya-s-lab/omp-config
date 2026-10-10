@@ -19,4 +19,4 @@
 
 轻量模式下，`config-light.yml` 用覆盖 `extensions` 的方式排除这里的扩展。
 
-本文件不会被加载；`/update-omp` 和 `/sync-omp-config` 只同步这里的 `*.ts`。
+本文件不会被加载；仓库 → 本机的更新器（启动时自动更新和 `/update-omp`）与 `/sync-omp-config` 只同步这里的 `*.ts`。

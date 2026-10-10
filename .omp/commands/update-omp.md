@@ -1,70 +1,32 @@
 ---
-description: 用本仓库快照更新本机 OMP 配置和 pi-bansos 状态（repo → 本机）
+description: 用本仓库工作区更新本机 OMP 配置和 pi-bansos 状态（repo → 本机）
 ---
 
-把仓库 `agent/` 单向写入本机 `~/.omp/agent`（先展开为绝对路径），把仓库 `pi/agent/pi-bansos-relay-state.json` 写入本机 `~/.pi/agent/`，与 `/sync-omp-config` 方向相反。不使用 subagent，直接执行。
+用当前仓库工作区（含未推送的改动）手动执行一次 repo → 本机更新，与 `/sync-omp-config` 方向相反。实际写入全部由 `agent/omp-config-update.ts` 完成，规则以它文件头的说明和代码为准；本命令只负责运行、补上脚本不做的插件卸载判断、报告结果。不使用 subagent，直接执行。
+
+平时不需要这个命令：装好之后，`omp-config-autoupdate` 扩展在每次 OMP 启动时从 GitHub 默认分支自动更新。它用于新机器首次安装更新器，以及把未推送的本地改动先应用到本机。
 
 `$ARGUMENTS`：
-- 为空：更新下表全部项。
-- `check`：只读，逐项比对并报告差异，包括 light 已安装入口、PATH shadowing 和 `./plugin-audit.sh` 的结论；不 mkdir、复制、chmod、rename、编辑、装卸插件，不改 PATH 或 shell 配置。
+- 为空：执行更新。
+- `check`：只读，报告会写入、删除的文件和缺失的插件，并跑 `./plugin-audit.sh` 报告卸载候选；不写任何文件，不装卸插件。
 
-结构化配置（`config.yml`、`settings.json`、各 JSON）本机已有时，先 `read` 两边、比出有差异的字段，再用 `edit` 只改这些行；不整文件覆盖，不重新序列化。
+## 步骤
 
-## 更新项
+1. 在仓库根目录运行：
+   - 更新：`bun agent/omp-config-update.ts apply --source .`
+   - `check`：`bun agent/omp-config-update.ts apply --source . --check`
 
-| 仓库 | 本机 | 规则 |
-| --- | --- | --- |
-| `agent/config.yml` | 同名 | 只改有差异的字段；`/sync-omp-config` 列出的本机字段不动 |
-| `agent/settings.json` | 同名 | 只改有差异的字段 |
-| `agent/APPEND_SYSTEM.md` | 同名 | 直接覆盖 |
-| `agent/APPEND_SYSTEM_MODEL.md` | 同名 | 直接覆盖；仓库没有时不动本机 |
-| `agent/PROMPT-INJECT-*.md` | 同名 | 直接覆盖；本机多出来的模板不删 |
-| `agent/thinking-translator.json` | 同名 | 只改有差异的字段 |
-| `agent/system-prompt-replace.json` | 同名 | 本机已有时只改有差异的字段；缺失时复制 |
-| `agent/agents/` | `agents/` | `diff -rq` 确认范围后覆盖 |
-| `agent/extensions/*.ts` | `extensions/` | 同名覆盖、缺的补齐，见「扩展」 |
-| `agent/extensions-last/*.ts` | `extensions-last/` | 同名覆盖、缺的补齐，见「扩展」 |
-| `agent/extensions/lang-nag.json` | 同名 | 只改有差异的字段 |
-| `agent/extensions/input-polish.json` | 同名 | 只改有差异的字段 |
-| `agent/config-light.yml`、`agent/APPEND_SYSTEM_LIGHT.md`、`agent/omp-light.ts` | 同名 | 三件整体更新并安装入口，见「Light 启动器」 |
-| `pi/agent/pi-bansos-relay-state.json` | `~/.pi/agent/pi-bansos-relay-state.json` | 本机已有时只改有差异的字段；缺失时 `mkdir -p ~/.pi/agent` 后复制 |
-| `install-plugins.sh` 的插件列表 | 已装插件 | 见「插件」 |
+   agent 目录默认取 `PI_CODING_AGENT_DIR`，否则 `~/.omp/agent`；使用 named profile 时加 `--agent-dir <omp config path 的输出>`。脚本报告 `another update holds …` 时，说明有一次自动更新正在进行，稍后重跑。
+2. 跑 `./plugin-audit.sh`，只处理 `[卸载候选]`：问用户是否 `omp plugin uninstall <name>`，并告知作者从脚本移除通常已经验证过，可以直接删。`[安装]` 已由脚本补装，`[保留]` 不动。
+3. 本机初始化项（`extensions/doc-polish.json`、`unified-exec-bun-pty` 的 PTY 原生包缓存、`commandcode-model-spec` 依赖的 `commandcode-models.json`）脚本不碰。已存在就不动；缺失时问用户是否创建、内容填什么，未确认就跳过并在报告里说明。
+4. 报告脚本输出的写入、删除、跳过（应用托管文件）、补装的插件、note 和 error，以及卸载结果和初始化项的处理。
 
-agent 定义和 `config.yml` 里的模型绑定必须一起更新；只更新一边会让 agent 名和模型对不上。
+## 手动更新与自动更新的差别
 
-数据库、WAL、会话、缓存、日志、`models.yml`、`commandcode-models.json`、`last-changelog-version` 都不迁。
+- 手动更新不删除文件、不删除结构化配置里的键：删除只按 git 记录的“上次自动应用的提交 → 新提交”之间仓库删掉的内容计算，工作区没有这个基准。
+- 手动更新不改写 `<agent 目录>/.omp-config-applied`。下次启动时，只要 GitHub 默认分支的提交与这个记录不同，自动更新就会用它覆盖本机，包括手动应用的、尚未推送的改动；推送并合并后再启动即可保持一致。
+- 本机初始化项只有手动更新会问；自动更新从不创建它们。
 
-## 扩展
+## 生效时机
 
-- 不删除本机多出来的扩展；仓库删掉的扩展也不在本机卸载。
-- `extensions-last/` 里的扩展由 `config.yml` 的 `extensions` 按路径加载，必须是列表最后一项；不要放进 `extensions/`，否则会被提前加载。
-- 应用托管的文件跳过、不覆盖：首行为 `// @orca-managed-pi-extension`，或任意行含 `marker: _otty`。以标记为准，不凭文件名判断。
-- 本机相关的初始化项（`doc-polish.json`、`unified-exec-bun-pty.ts` 需要的 PTY 原生包缓存、`commandcode-model-spec.ts` 依赖的 `commandcode-models.json`）已存在就不动；缺失时问用户是否创建、内容填什么，未确认就跳过并在报告里说明。
-
-## Light 启动器
-
-1. 预检：三件源文件齐全，且 `Bun.which("omp")` 能得到绝对路径。任一不满足就报告原因并停止，不写任何 light 文件。
-2. 三件复制到 `~/.omp/agent`，并在 `dirname(omp)` 安装入口：
-   - POSIX：`omp-light`，内容就是 `agent/omp-light.ts` 原文（带 shebang，不套 wrapper），权限 `0755`。
-   - Windows：`omp-light.ts` 加一个只转发参数的 `omp-light.cmd`：
-     ```
-     @echo off
-     bun "%~dp0omp-light.ts" %*
-     ```
-   每个目标都先写同目录临时文件，再原子 rename 替换。
-3. 不改 PATH 和 shell rc/profile，不替换 `omp`。目录不可写时报告绝对路径和错误，不换目录。
-4. 安装后重新解析 `omp-light`；解析到的不是刚装的入口时，报告 PATH shadowing 及实际和期望路径，不修复。
-
-## 插件
-
-跑 `./plugin-audit.sh`，按它的分类行动，不自行重新扫描：
-- `[安装]`：跑 `./install-plugins.sh` 补齐。
-- `[卸载候选]`：问用户是否 `omp plugin uninstall <name>`，并告知作者从脚本移除通常已经验证过，可以直接删。
-- `[保留]`：用户自装的，不动。
-
-## 校验与报告
-
-- 复制的文件与仓库 `cmp` 一致；编辑过的结构化配置，除本机字段外与仓库逐字段一致；安装入口检查内容、权限和解析路径。
-- 动过的 YAML/JSON 两端都要能解析：`config.yml`、`config-light.yml` 用 `Bun.YAML.parse`，`settings.json`、`thinking-translator.json`、`system-prompt-replace.json`、`lang-nag.json`、`input-polish.json`、`pi-bansos-relay-state.json` 用 `JSON.parse`。
-- 不打印凭据，不把明文凭据写进本机。
-- 报告改了哪些文件、装卸了哪些插件、哪些项因等待确认被跳过，并提醒重启 OMP：APPEND_SYSTEM、扩展、插件在下次启动时加载；`APPEND_SYSTEM_MODEL.md`、`system-prompt-replace.json` 从下一条 prompt 开始生效；`PROMPT-INJECT-*.md` 从下一个派出的 subagent 开始生效；`pi-bansos-relay-state.json` 在已运行的会话里要到下次会话启动或下一次 `/bansos` 改动时才生效。
+报告结束时提醒：`APPEND_SYSTEM.md`、扩展、插件在下次启动时加载；`config.yml` 由 OMP 实时重载；`APPEND_SYSTEM_MODEL.md`、`system-prompt-replace.json` 从下一条 prompt 开始生效；`PROMPT-INJECT-*.md` 和 `agents/` 从下一个派出的 subagent 开始生效；`pi-bansos-relay-state.json` 在已运行的会话里要到下次会话启动或下一次 `/bansos` 改动时才生效。
