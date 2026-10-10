@@ -1,5 +1,4 @@
-extensions:
-  - ~/.claude
+extensions: []
 disabledExtensions:
   - extension-module:ctx-post-compact-hint
   - extension-module:ctx-tasklog
