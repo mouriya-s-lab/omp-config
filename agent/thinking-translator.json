@@ -2,8 +2,8 @@
   "enabled": true,
   "targetLanguage": "Simplified Chinese",
   "translatorModel": {
-    "provider": "futureppo-pool",
-    "id": "ministral-14b-latest"
+    "provider": "bansos",
+    "id": "nemotron-3.5-lightning-free"
   },
   "trace": false
 }
