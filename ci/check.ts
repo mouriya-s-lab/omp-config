@@ -26,8 +26,9 @@ const PROMPT = "Reply with exactly: OK";
 const THINKING_LEVELS: Record<string, true> = { off: true, minimal: true, low: true, medium: true, high: true, xhigh: true, max: true, auto: true, inherit: true };
 
 /**
- * Log warnings caused by the CI host, not by the configuration. Each entry
- * names the host fact behind it; a warning that matches none is a diagnostic.
+ * Log warnings caused by the CI host or the CI's own model setup, not by the
+ * configuration. Each entry names the fact behind it; a warning that matches
+ * none is a diagnostic.
  */
 const HOST_LOG_WARNINGS: readonly { readonly match: (record: LogRecord) => boolean; readonly reason: string }[] = [
 	{
@@ -37,6 +38,12 @@ const HOST_LOG_WARNINGS: readonly { readonly match: (record: LogRecord) => boole
 	{
 		match: r => r.message.startsWith("Failed to acquire power assertion"),
 		reason: "no D-Bus system bus on the CI host",
+	},
+	{
+		// modelRoles is machine-local; CI binds every role to the free model, which reasons and can
+		// exhaust omp's output budget for this background task. A machine's own roles decide this, not the repo.
+		match: r => r.message.startsWith("Skill description compression failed") && String(r.error ?? "").includes("Model stopped: length"),
+		reason: "the CI's free model, bound to every model role, ran out of omp's skill-compression output budget while reasoning",
 	},
 ];
 
