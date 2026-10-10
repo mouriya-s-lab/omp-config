@@ -814,7 +814,7 @@ overlay 里上下键或滚轮滚动，`C` 复制到系统剪贴板，`R` 重新�
 
 ## 维护须知
 
-- **配置检查（CI）**：push 到 `master`、每个 PR、每天定时和手动触发时，在一次性环境里装最新 omp、用更新器应用仓库配置，再用免费模型分别跑一次完整模式和轻量模式的真实 session，把 omp 和扩展打印的故障与警告逐条报告出来；只报告，不拦截合并。本地用 `bun ci/check.ts` 复现。设计、判据和覆盖边界见 `ci/README.md`。检查不调用工具、不派 subagent，所以扩展行为的改动仍要用 `/update-omp` 应用工作区、重启 OMP，实际触发对应的工具、命令或钩子，看输出和副作用。改动合并前，自动更新会在默认分支有新提交时把它覆盖回去。
+- **配置检查（CI）**：push 到 `master`、每个 PR、每天定时和手动触发时，在一次性环境里装最新 omp、用更新器应用仓库配置，再用免费模型分别跑一次完整模式和轻量模式的真实 session，把 omp 和扩展打印的故障与警告去重后逐个报告出来，每个故障带一个跨运行稳定的 hash 标识；只报告，不拦截合并。本地用 `bun ci/check.ts` 复现。设计、判据和覆盖边界见 `ci/README.md`。检查不调用工具、不派 subagent，所以扩展行为的改动仍要用 `/update-omp` 应用工作区、重启 OMP，实际触发对应的工具、命令或钩子，看输出和副作用。改动合并前，自动更新会在默认分支有新提交时把它覆盖回去。
 - **增删托管项时同时改三处**：`agent/omp-config-update.ts` 的 `managedPlain` / `STRUCTURED`，`.omp/commands/sync-omp-config.md` 的同步范围，以及本文件。更新器的 `applySnapshot(options)` 接口要保持兼容：已安装的旧更新器会导入新提交里的它。
 - **不要在 `omp-config-update.ts` 里写出 Otty 标记的字面量**：标记检查是“文件任意位置含有”，这个文件自己也是托管文件，写出来就会被当成应用托管文件，从此跳过更新。
 - **扩展建的辅助会话必须传 `taskDepth: 1`。** 目前有六处：`bro`、`doc-polish`、`input-polish`、`lang-nag`、`watchdog-agent` 的聊天 reviewer、`fork-task` 的 shake。不传的话 SDK 把它当主会话，`dispose()` 时会销毁全局 `AgentLifecycleManager`，所有空闲 subagent 变成 `Unknown agent`，无法再续聊。`lang-nag` 几乎每轮都建辅助会话，漏传会让 subagent 很快失联。只调用 `completeSimple` 的扩展（`task-split-check`、`task-completion-judge`）不建会话，不涉及这条。
