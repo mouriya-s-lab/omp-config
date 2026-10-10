@@ -22,6 +22,9 @@
 // else under the agent dir belongs to the host and is never touched:
 //   - config.yml keys outside the repo, and LOCAL_CONFIG_FIELDS even when
 //     the repo has them (absence on the host stays absence);
+//   - entries of a MACHINE_LIST_FIELDS list (config.yml `extensions`) that
+//     the repo's list does not have, unless the repo just dropped them (see
+//     DELETIONS); they stay ahead of the repo's entries;
 //   - keys a structured file has only on the host;
 //   - files not in the managed set (extra extensions, agents, templates,
 //     doc-polish.json, runtime state);
@@ -32,10 +35,11 @@
 //
 // DELETIONS. Only in `auto`, and only what git says the repo dropped between
 // the applied commit and the new one: managed files deleted in that range,
-// and structured keys present in the old repo version but not the new one
+// structured keys present in the old repo version but not the new one
 // (a dropped map loses only the repo's old keys; it is removed only if that
-// leaves it empty). Without the old commit (first run, gc'd object) nothing
-// is deleted.
+// leaves it empty), and entries of a MACHINE_LIST_FIELDS list the old repo
+// list had and the new one does not. Without the old commit (first run,
+// gc'd object) nothing is deleted.
 //
 // SAFETY. Every structured source must parse to a mapping before any write;
 // one invalid source aborts the whole apply. A host structured file that does
@@ -97,23 +101,30 @@ export const LOCAL_CONFIG_FIELDS: readonly string[] = [
 	"compaction.thresholdTokens",
 ];
 
+/**
+ * config.yml lists shared by repo and machine: entries the repo lists are the
+ * repo's; entries it does not list belong to the machine and stay ahead of the
+ * repo's. /sync-omp-config never writes machine entries into the repo.
+ */
+export const MACHINE_LIST_FIELDS: readonly string[] = ["extensions"];
+
 type Format = "json" | "yaml";
 
 interface StructuredItem {
 	readonly rel: string;
 	readonly format: Format;
 	readonly localFields: readonly string[];
+	readonly machineLists: readonly string[];
 }
 
 /** Structured files, in apply order: config.yml last (it is live-reloaded). */
 const STRUCTURED: readonly StructuredItem[] = [
-	{ rel: "agent/settings.json", format: "json", localFields: [] },
-	{ rel: "agent/thinking-translator.json", format: "json", localFields: [] },
-	{ rel: "agent/system-prompt-replace.json", format: "json", localFields: [] },
-	{ rel: "agent/extensions/lang-nag.json", format: "json", localFields: [] },
-	{ rel: "agent/extensions/input-polish.json", format: "json", localFields: [] },
-	{ rel: "pi/agent/pi-bansos-relay-state.json", format: "json", localFields: [] },
-	{ rel: "agent/config.yml", format: "yaml", localFields: LOCAL_CONFIG_FIELDS },
+	{ rel: "agent/thinking-translator.json", format: "json", localFields: [], machineLists: [] },
+	{ rel: "agent/system-prompt-replace.json", format: "json", localFields: [], machineLists: [] },
+	{ rel: "agent/extensions/lang-nag.json", format: "json", localFields: [], machineLists: [] },
+	{ rel: "agent/extensions/input-polish.json", format: "json", localFields: [], machineLists: [] },
+	{ rel: "pi/agent/pi-bansos-relay-state.json", format: "json", localFields: [], machineLists: [] },
+	{ rel: "agent/config.yml", format: "yaml", localFields: LOCAL_CONFIG_FIELDS, machineLists: MACHINE_LIST_FIELDS },
 ];
 
 /** Repo files copied verbatim. `rel` uses `/` separators. */
@@ -256,35 +267,50 @@ function pathIsLocal(path: readonly string[], localFields: readonly string[]): b
 	return localFields.some(field => joined === field || joined.startsWith(`${field}.`));
 }
 
-/** Repo values win key by key; host-only keys and local fields stay as they are. */
-function overlay(host: unknown, repo: Mapping, localFields: readonly string[], path: readonly string[]): Mapping {
+type MergeRules = Pick<StructuredItem, "localFields" | "machineLists">;
+
+/** Repo values win key by key; host-only keys, local fields and machine list entries stay as they are. */
+function overlay(host: unknown, repo: Mapping, rules: MergeRules, path: readonly string[]): Mapping {
 	// Deep copy: removeDropped later mutates nested maps, which must not alias the host's.
 	const result: Mapping = isMapping(host) ? structuredClone(host) : {};
 	for (const [key, value] of Object.entries(repo)) {
 		const keyPath = [...path, key];
-		if (pathIsLocal(keyPath, localFields)) continue;
+		if (pathIsLocal(keyPath, rules.localFields)) continue;
 		if (isMapping(value)) {
-			result[key] = overlay(result[key], value, localFields, keyPath);
+			result[key] = overlay(result[key], value, rules, keyPath);
 			continue;
 		}
 		// A non-map would wipe a local field nested under this key; the host's map stays.
 		const prefix = `${keyPath.join(".")}.`;
-		if (isMapping(result[key]) && localFields.some(field => field.startsWith(prefix))) continue;
-		result[key] = structuredClone(value);
+		if (isMapping(result[key]) && rules.localFields.some(field => field.startsWith(prefix))) continue;
+		const current = result[key];
+		// Entries the repo's list lacks stay on the host, ahead of the repo's entries.
+		result[key] =
+			Array.isArray(value) && Array.isArray(current) && rules.machineLists.includes(keyPath.join("."))
+				? [...current.filter(entry => !value.some(own => Bun.deepEquals(own, entry))), ...structuredClone(value)]
+				: structuredClone(value);
 	}
 	return result;
 }
 
-/** Remove from `host` the keys the repo had in `oldRepo` and dropped in `newRepo`. */
-function removeDropped(host: Mapping, oldRepo: Mapping, newRepo: Mapping, localFields: readonly string[], path: readonly string[]): void {
+/** Remove from `host` the keys and machine-list entries the repo had in `oldRepo` and dropped in `newRepo`. */
+function removeDropped(host: Mapping, oldRepo: Mapping, newRepo: Mapping, rules: MergeRules, path: readonly string[]): void {
 	for (const [key, oldValue] of Object.entries(oldRepo)) {
 		const keyPath = [...path, key];
-		if (pathIsLocal(keyPath, localFields)) continue;
+		if (pathIsLocal(keyPath, rules.localFields)) continue;
 		const current = host[key];
+		if (Array.isArray(oldValue) && Array.isArray(current) && rules.machineLists.includes(keyPath.join("."))) {
+			// The repo's dropped entries go; entries the repo never listed are the machine's.
+			const next = newRepo[key];
+			const kept = current.filter(entry => !oldValue.some(old => Bun.deepEquals(old, entry)) || (Array.isArray(next) && next.some(own => Bun.deepEquals(own, entry))));
+			if (kept.length === 0 && !(key in newRepo)) delete host[key];
+			else host[key] = kept;
+			continue;
+		}
 		if (!(key in newRepo)) {
 			// A dropped map loses only the keys the repo had; host-only and local keys under it stay.
 			if (isMapping(oldValue) && isMapping(current)) {
-				removeDropped(current, oldValue, {}, localFields, keyPath);
+				removeDropped(current, oldValue, {}, rules, keyPath);
 				if (Object.keys(current).length === 0) delete host[key];
 			} else if (!isMapping(current)) {
 				// The repo had a value here; a map in its place is the host's own and stays.
@@ -293,7 +319,7 @@ function removeDropped(host: Mapping, oldRepo: Mapping, newRepo: Mapping, localF
 			continue;
 		}
 		const next = newRepo[key];
-		if (isMapping(oldValue) && isMapping(next) && isMapping(current)) removeDropped(current, oldValue, next, localFields, keyPath);
+		if (isMapping(oldValue) && isMapping(next) && isMapping(current)) removeDropped(current, oldValue, next, rules, keyPath);
 	}
 }
 
@@ -381,11 +407,11 @@ function planStructured(opts: ApplyOptions, report: ApplyReport): Op[] {
 				continue;
 			}
 		}
-		const merged = overlay(host, repo, item.localFields, []);
+		const merged = overlay(host, repo, item, []);
 		const oldText = oldRepoText(opts, item.rel);
 		if (oldText !== undefined) {
 			try {
-				removeDropped(merged, parseStructured(oldText, item.format), repo, item.localFields, []);
+				removeDropped(merged, parseStructured(oldText, item.format), repo, item, []);
 			} catch {
 				report.notes.push(`${item.rel}: previous version unparsable, no keys removed`);
 			}

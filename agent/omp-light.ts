@@ -2,7 +2,7 @@
 
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { accessSync, constants, statSync } from "node:fs";
+import { accessSync, constants, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -21,6 +21,27 @@ function readableFile(path: string): boolean {
 	} catch {
 		return false;
 	}
+}
+
+/**
+ * config-light.yml empties `extensions` to drop the full-mode-only entries
+ * under `extensions-last/`. Every other config.yml entry (the machine's own,
+ * such as ~/.claude) is passed back with `-e`, a load lane the override does
+ * not reach, so light mode keeps it. An unreadable config.yml adds nothing;
+ * omp reports it on its own.
+ */
+function machineExtensionArgs(agentDir: string): string[] {
+	let config: unknown;
+	try {
+		config = Bun.YAML.parse(readFileSync(join(agentDir, "config.yml"), "utf8"));
+	} catch {
+		return [];
+	}
+	const entries = typeof config === "object" && config !== null && "extensions" in config ? config.extensions : undefined;
+	if (!Array.isArray(entries)) return [];
+	return entries
+		.filter((entry): entry is string => typeof entry === "string" && !entry.replaceAll("\\", "/").includes("/extensions-last/"))
+		.flatMap(entry => ["-e", entry.startsWith("~/") ? join(homedir(), entry.slice(2)) : entry]);
 }
 
 function childExitCode(code: number | null, signal: ChildSignal | null): number {
@@ -95,6 +116,7 @@ async function main(): Promise<number> {
 		configPath,
 		"--append-system-prompt",
 		promptPath,
+		...machineExtensionArgs(agentDir),
 		...process.argv.slice(2),
 	];
 	return await runOmp(ompPath, args);
