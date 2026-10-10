@@ -246,10 +246,10 @@ git status --short
 `omp-light` 启动一个精简的 OMP 进程，适合简单小任务：
 
 - 用 `APPEND_SYSTEM_LIGHT.md` 代替完整的追加提示词。
-- 按 `config-light.yml` 禁用 12 个行为扩展：`ctx-post-compact-hint`、`ctx-tasklog`、`ctx-tool`、`doc-polish`、`fork-task`、`isolation-nudge`、`lang-nag`、`task-completion-judge`、`task-split-check`、`tool-policy-nag`、`user-prompt-inject`、`watchdog-agent`。
+- 按 `config-light.yml` 禁用 13 个行为扩展：`ctx-post-compact-hint`、`ctx-tasklog`、`ctx-tool`、`doc-polish`、`fork-task`、`isolation-nudge`、`lang-nag`、`task-completion-judge`、`task-split-check`、`tool-policy-nag`、`user-prompt-inject`、`watchdog-agent`、`wt-tool`。
 - 其余 7 个扩展照常加载：`append-system-model`、`bro`、`input-polish`、`repo-rules`、`subagent-todo`、[omp-config-autoupdate](#omp-config-autoupdate)，以及兼容性修复 `commandcode-model-spec`。`APPEND_SYSTEM_MODEL.md` 因此在轻量模式下照样注入；自动更新开着时，用 `omp-light` 启动也会更新。
 - `config-light.yml` 把 `extensions` 覆盖成空列表，去掉 `config.yml` 末项的 [system-prompt-replace](#system-prompt-replace)。`disabledExtensions` 只过滤按模块名发现的扩展，管不到 `config.yml` 里按路径加载的项，所以只能这样排除。覆盖会连带去掉本机条目（如 `~/.claude`），所以 `omp-light` 读本机 `config.yml`，把 `extensions` 里不在 `extensions-last/` 下的条目逐个用 `-e` 传给 `omp`；`-e` 是另一条加载通道，不受这个覆盖影响。`extensions-last/` 下的扩展因此只属于完整模式。
-- 插件、rules、skills、上下文文件，以及 model、thinking、profile、auth、session 设置都不变。被禁用扩展注册的工具（`ctx`、`polish_doc`、`fork_task`）在轻量模式下不存在。
+- 插件、rules、skills、上下文文件，以及 model、thinking、profile、auth、session 设置都不变。被禁用扩展注册的工具（`ctx`、`polish_doc`、`fork_task`、`wt`、`wt_remove`）在轻量模式下不存在。
 - `omp-light` 从 agent 目录读 `config-light.yml` 和 `APPEND_SYSTEM_LIGHT.md`：设置了 `PI_CODING_AGENT_DIR` 时用它，否则用 `~/.omp/agent`。缺任何一个就直接退出，不回退到别的目录。
 - `omp-light` 后面的参数原样传给 `omp`，可以覆盖入口预设的同名参数。
 
@@ -348,6 +348,7 @@ harness 会把 `APPEND_SYSTEM.md` 和每个 agent 的 `description` 都注入主
 |[doc-polish](#doc-polish)|`polish_doc` / `/polish-doc`：不改原意地润色文档|否|
 |[bro](#bro)|`/bro`：把回复、文档或网页改写成易懂的解释|是|
 |[input-polish](#input-polish)|`Ctrl+Enter` 润色输入框草稿，overlay 预览后回车发送、Esc 取消|是|
+|[wt-tool](#wt-tool)|注册 `wt` / `wt_remove`：主 agent 调用人用的 `/wt` 进入新 worktree，或检查、确认后删掉所在 worktree 回到主 checkout|否|
 |[commandcode-model-spec](#commandcode-model-spec)|修复 `--model` 指定 commandcode 模型时的认证失败|是|
 |[omp-config-autoupdate](#omp-config-autoupdate)|启动时从 GitHub 默认分支自动更新本机配置；默认关闭，`/omp-config-autoupdate on\|off` 开关，`run` 立即更新并显示详细报告|是|
 
@@ -777,6 +778,43 @@ overlay 里上下键或滚轮滚动，`C` 复制到系统剪贴板，`R` 重新�
 - **失败**：模型不可用时只弹警告，不打开 overlay。请求失败、输出为空、占位符对不上时，overlay 显示原因，`Esc` 关闭。输入框都不变。
 - **辅助会话**：无工具、内存会话、空 system prompt、不加载扩展、`taskDepth: 1`。每次润色消耗一次所选模型的请求。
 
+### 会话迁移
+
+#### wt-tool
+
+`wt-tool.ts` 注册 `wt` 和 `wt_remove` 两个工具，让主 agent 自己把会话移进一个新 worktree，用完再删掉它回到主 checkout。OMP 只让人在输入框里用 `/wt`，没有删 worktree 的命令，扩展 API 也没有调用内置斜杠命令的入口。
+
+- **范围**：只在交互式 TUI 的主会话里启用。两个工具默认不启用（`defaultInactive`），`session_start` / `session_switch` 时才加进主会话的启用列表；subagent、`omp -p`、RPC、ACP 里都没有。headless 模式下人用的 `/wt`、`/move` 走另一条路径（`relocateHeadlessSession`），扩展够不到。
+- **时机**：`/wt`、`/move` 在会话运行时拒绝执行，而工具调用总发生在运行中，所以两个工具都只登记请求，并在结果里要求模型立即结束本轮。两个工具共用一个队列，同一时间只能有一个请求，模型在本轮结束前再登记会报错。
+  1. 一轮真正结束（`agent_end` 且不是 `willContinue`）后开始等待：每 50 毫秒检查一次，会话空闲且没有排队消息时执行一次。自动续写（todo 提醒、重试等）不算结束；新一轮开始就停止等待，等它结束再继续。
+  2. 用户按 Esc 中断的那一轮结束时取消请求：UI 弹提示，模型在下一轮看到“什么都没变”的说明。
+  3. 会话切换或退出时丢弃请求。
+- **执行人的命令时**：请求原样交给输入框提交时用的分发器 `executeBuiltinSlashCommand`，人用这些命令时的行为全部照旧。执行期间临时替换 TUI 实例的 `showError`、`showWarning`、`showStatus`、`present`，照常显示，同时记下文字回传给模型。这次命令不进人的输入历史（上箭头），不清空人正在输入的草稿，不计入斜杠命令使用统计，也不经过其他扩展的 `input` 钩子。
+- **回传**：结果作为 custom 消息（`attribution: "agent"`）发出并开启新一轮。
+- **拿到 TUI 实例**：扩展 API 不暴露 InteractiveMode。TUI 下 `ctx.ui.setEditorComponent` 以 InteractiveMode 实例为 `this` 调用它的原型方法；扩展在这一次同步调用里把原型方法换成只记录 `this` 的函数，调用完立即恢复，编辑器不会真被替换。拿不到实例、会话不符或处于 collab guest 时，工具调用直接返回错误，不登记请求。
+
+**`wt`**：执行 OMP 内置的 `/wt`，把当前 checkout 分叉成一个新的 linked worktree，带上未提交的改动，再把会话（cwd 和会话文件）移过去。
+
+- **参数**：`branch`，可省略，省略时由 `/wt` 自己取默认的 `wt/<时间戳>`；`confirm`，只在已经身处 linked worktree 时用。
+- **已经在 worktree 里时先不建**：会话 cwd 已在某个 linked worktree 里时，这次调用什么都不建，只返回当前 worktree 的路径、分支、HEAD、未提交条目数、主 checkout，说明强行再建的后果（从当前 worktree 的 HEAD 开新分支、带走这些未提交改动、当前 worktree 保留；`worktree.cleanSource` 打开时还会把当前 worktree 重置清空），以及一个 `confirm` 值（worktree 路径和分支的哈希）。模型通常就地继续工作；确实要再建时，带上这个 `confirm` 再调用一次才登记。主 checkout 或不在 git 仓库里时直接登记，不需要第二次。
+- **继承的行为**：collab guest 下拒绝；vibe 模式或 `/btw` 进行中时拒绝；`worktree.*` 设置生效，包括 `worktree.cleanSource` 清理源 checkout；移动失败时回滚；显示汇总行；新 worktree 登记为本会话所有，退出时按 `worktree.onExit` 处理。
+- **结果**：会话 cwd 变了算成功，回传原路径、新路径和 `/wt` 的汇总行；失败时回传人看到的报错。
+
+**`wt_remove`**：删掉会话所在的 linked worktree，把会话移到仓库的主 checkout。分支一律保留。必须调用两次：
+
+1. **不带 `confirm`：只检查，不改任何东西。** 报告 worktree、分支、主 checkout 路径，判定（`SAFE` / `UNSAFE` / `BLOCKED`），删除会永久丢掉的内容（已暂存、未暂存、未跟踪的文件，以及被 ignore 的文件和目录），分支上从主 checkout 的 HEAD 到不了的提交（保留在分支上，只作参考），阻塞项，以及一个 `confirm` 值。
+   - `confirm` 值是 worktree 路径、分支、上游 `planWorktreeExit` 的 worktree 指纹（HEAD、分支 tip、porcelain 状态、每个改动路径的大小和 mtime）和 ignore 文件清单的哈希。检查前后各算一次，不一致就让模型重查。
+   - 阻塞项：本会话正在运行的后台任务；正在运行的 task subagent；cwd 在这个 worktree 里的活着的 task subagent。扩展自己建的内存辅助会话（lang-nag、watchdog reviewer、bro 等）不算。
+   - 主 checkout、detached HEAD、没有提交的 worktree 直接报错。
+2. **模型看过报告、自己决定后，带上 `confirm` 再调用一次。** 这次会重新检查，值不一致（worktree 在检查后有文件增删改、HEAD 或分支动过，或者值来自别的检查）或有阻塞项就拒绝，不登记。`UNSAFE` 也可以确认，由模型判断那些文件能不能丢。
+
+登记后，会话空闲时依次：再检查一次，不一致或有阻塞就停下，什么都不动；执行人的 `/move <主 checkout>`（继承 `/btw` 门、设置落盘、移动失败回滚）；确认会话 cwd 的真实路径已是主 checkout；再检查一次；最后强制 `git worktree remove`。回传时分清是哪一步停下的：没移动、移动了但没删、删除失败，或已删除（附分支是否还在、分支有没有主 checkout 到不了的提交）。
+
+限制：
+
+- 只能发现本进程里的使用者。其他 OMP 进程、终端、编辑器或 `exec_command` 持久会话正在用这个目录时检测不到。
+- `wt` 在本次启动里建的 worktree 被 `wt_remove` 删掉后，InteractiveMode 私有的已拥有列表里还有它。`worktree.onExit` 是 `ask` 或 `remove` 时，退出时会为这个已不存在的 worktree 弹一次确认或报一行删除失败；分支不会因此被删。`keep` 不受影响。
+
 ### 配置同步
 
 #### omp-config-autoupdate
@@ -818,7 +856,7 @@ overlay 里上下键或滚轮滚动，`C` 复制到系统剪贴板，`R` 重新�
 - **增删托管项时同时改三处**：`agent/omp-config-update.ts` 的 `managedPlain` / `STRUCTURED`，`.omp/commands/sync-omp-config.md` 的同步范围，以及本文件。更新器的 `applySnapshot(options)` 接口要保持兼容：已安装的旧更新器会导入新提交里的它。
 - **不要在 `omp-config-update.ts` 里写出 Otty 标记的字面量**：标记检查是“文件任意位置含有”，这个文件自己也是托管文件，写出来就会被当成应用托管文件，从此跳过更新。
 - **扩展建的辅助会话必须传 `taskDepth: 1`。** 目前有六处：`bro`、`doc-polish`、`input-polish`、`lang-nag`、`watchdog-agent` 的聊天 reviewer、`fork-task` 的 shake。不传的话 SDK 把它当主会话，`dispose()` 时会销毁全局 `AgentLifecycleManager`，所有空闲 subagent 变成 `Unknown agent`，无法再续聊。`lang-nag` 几乎每轮都建辅助会话，漏传会让 subagent 很快失联。只调用 `completeSimple` 的扩展（`task-split-check`、`task-completion-judge`）不建会话，不涉及这条。
-- **升级 OMP 后**，在真实 TUI 里重新验证 [fork-task](#fork-task)、[subagent-todo](#subagent-todo) 和 [user-prompt-inject](#user-prompt-inject)，它们依赖 OMP 内部实现（`AgentRegistry`、`ctx.agent`、子会话文件路径、钩子顺序、`context` 事件的调用时机、宿主工具注入、`TodoTool` 读写的会话接口）。
+- **升级 OMP 后**，在真实 TUI 里重新验证 [fork-task](#fork-task)、[subagent-todo](#subagent-todo)、[user-prompt-inject](#user-prompt-inject) 和 [wt-tool](#wt-tool)，它们依赖 OMP 内部实现（`AgentRegistry`、`ctx.agent`、子会话文件路径、钩子顺序、`context` 事件的调用时机、宿主工具注入、`TodoTool` 读写的会话接口、InteractiveMode 的原型与公开成员、`executeBuiltinSlashCommand`、`/wt` 和 `/move` 的 TUI 处理、`planWorktreeExit` 的指纹）。
 - **升级 OMP 后**，启动主会话时如果弹出 `system-prompt-replace: … found no target` 警告，就按新的模板文字改 `system-prompt-replace.json`；上游删掉了规则要改写的那句话时，删掉这条规则。同时确认 [system-prompt-replace](#system-prompt-replace) 依赖的扩展加载顺序没变。
 - **扩展注入用户消息时写 `attribution: "agent"`。** 不写就默认 `user`，[user-prompt-inject](#user-prompt-inject) 会把它当成用户原话注入 mentor 和 discussant。
 - **改 agent 定义前**读 `agent/agents/README.txt`；目录里的笔记用 `.txt`，不要用 `.md`。

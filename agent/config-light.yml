@@ -12,3 +12,4 @@ disabledExtensions:
   - extension-module:tool-policy-nag
   - extension-module:user-prompt-inject
   - extension-module:watchdog-agent
+  - extension-module:wt-tool
