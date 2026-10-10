@@ -6,7 +6,7 @@
 
 `before_agent_start` 的 handler 按加载顺序串行执行，每个拿到前一个返回的 system prompt；同一路径只在第一次出现时加载。并非所有事件都串行，例如 `session_shutdown` 的 handler 并发执行。
 
-1. native 发现：`~/.omp/agent/extensions/`，以及 `settings.json` 的 `extensions`（只在没有 `config.yml` 时读）
+1. native 发现：`~/.omp/agent/extensions/`，以及 `settings.json` 的 `extensions` 列出的 TS/JS 模块（不管有没有 `config.yml`；其中的扩展包根目录只在没有 `config.yml` 时读）
 2. hooks
 3. 插件扩展
 4. `-e` 参数

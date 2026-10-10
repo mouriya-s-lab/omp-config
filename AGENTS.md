@@ -51,7 +51,7 @@ flowchart LR
   end
   GH["GitHub default branch → ~/.omp/omp-config-src"]
   subgraph machine["~/.omp/agent"]
-    LA["config.yml"]
+    LA["config.yml / APPEND_SYSTEM.md"]
     LM["APPEND_SYSTEM_MODEL.md"]
     LT["thinking-translator.json / system-prompt-replace.json"]
     LQ["PROMPT-INJECT-*.md"]
@@ -59,8 +59,8 @@ flowchart LR
     LE["extensions/ / extensions-last/"]
     LL["config-light.yml / APPEND_SYSTEM_LIGHT.md / omp-light.ts"]
     LU["omp-config-update.ts / .omp-config-applied"]
-    PL["~/.omp/plugins/"]
   end
+  PL["~/.omp/plugins/"]
   subgraph pihome["~/.pi/agent"]
     LB["pi-bansos-relay-state.json"]
   end
@@ -72,7 +72,8 @@ flowchart LR
   repo -->|"/update-omp: updater apply --source ."| machine
   B -->|"/update-omp"| LB
   LB -->|"/sync-omp-config (read-only src)"| B
-  GH -->|"updater: install entry"| O
+  GH -->|"updater auto: install entry"| O
+  repo -->|"/update-omp: install entry"| O
   O --> M
   machine -->|"/sync-omp-config (read-only src)"| repo
   I -->|"updater: omp install missing"| PL
@@ -89,8 +90,10 @@ flowchart LR
 - **Load order is hook order.** `before_agent_start` handlers run extension by
   extension in load order, each receiving the system prompt the previous one
   returned (not every event is serial: `session_shutdown` handlers run
-  concurrently). Order: native discovery (`~/.omp/agent/extensions/`; a legacy
-  `settings.json` `extensions` list only when no `config.yml` exists) → hooks → plugin extensions → `-e` paths →
+  concurrently). Order: native discovery (`~/.omp/agent/extensions/`, plus the
+  TS/JS module entries of a legacy `settings.json` `extensions` list, loaded whether
+  or not `config.yml` exists; only its extension-pack roots are ignored when
+  `config.yml` exists) → hooks → plugin extensions → `-e` paths →
   `config.yml` `extensions` in list order → OMP's inline factories
   (SDK-supplied extensions, autoresearch, the custom-tools wrapper); a path loads
   once, at its first occurrence. `extensions-last/system-prompt-replace.ts` must
@@ -155,7 +158,7 @@ flowchart LR
 | `pi/agent/pi-bansos-relay-state.json` | `pi-bansos` plugin state (relay on/off, relay URL, saved relays, `statusBar`), read by the plugin from `~/.pi/agent/`, not `~/.omp/agent`. Written by the plugin's `/bansos` command; no credentials. Portable regular item in both directions. |
 | `.omp/commands/` | Project-level slash-command definitions run from repo root. |
 | repo root | `install-plugins.sh`, `plugin-audit.sh`, `README.md` (authoritative, in Chinese). |
-| `ci/`, `.github/workflows/config-check.yml` | The configuration check (CI): `ci/check.ts` installs the latest omp in a throwaway HOME, applies the repo with its own updater (plugins included), runs one real RPC session per mode (full, `omp-light`) on a keyless free model, and collects every stderr line, `extension_error`, and omp log warn/error. The report groups them into findings keyed by a SHA-256 of kind + normalized text, so one fault appears once with its per-phase counts and the same id across runs. `ci/README.md` holds its design, criteria, and coverage boundary. |
+| `ci/`, `.github/workflows/config-check.yml` | The configuration check (CI): `ci/check.ts` installs the latest omp in a throwaway HOME, applies the repo with its own updater (plugins included), runs one real RPC session per mode (full, `omp-light`) on a keyless free model, and collects updater and session diagnostics (every session stderr line, `extension_error`) and omp log warn/error; install output is collected only when a step fails. The report groups them into findings keyed by a SHA-256 of kind + normalized text, so one fault appears once with its per-phase counts and keeps its id across runs while kind and normalized text stay the same. `ci/README.md` holds its design, criteria, and coverage boundary. |
 | `agent/config-light.yml`, `agent/APPEND_SYSTEM_LIGHT.md`, `agent/omp-light.ts` | Light-mode assets are included in both sync directions; the updater copies them to `~/.omp/agent` and installs the PATH entry beside the resolved `omp`. Generated `omp-light` / `omp-light.cmd` entries are not repo files. |
 | `agent/omp-config-update.ts` | The repo → machine updater (Bun script, also a managed item copied to `~/.omp/agent`). `auto` mode runs at every start when the machine's auto-update switch is on; `apply --source <dir> [--check]` backs `/update-omp`. Its header documents what it touches, deletes, and never touches. |
 
@@ -188,7 +191,7 @@ git status --short            # confirm no runtime/db/cache files leaked into th
 ```
 
 There is no `build`/`lint`/unit-test command. The configuration check runs locally with
-`bun ci/check.ts` (writes only a temp dir; exit 0 clean, 1 diagnostics, 2 free model
+`bun ci/check.ts` (writes a throwaway temp root plus the report on stdout, and `$GITHUB_STEP_SUMMARY` when set; exit 0 clean, 1 diagnostics, 2 free model
 unavailable) and in GitHub Actions on push to `master`, pull requests, daily, and on
 dispatch (see Testing & QA).
 
@@ -199,8 +202,8 @@ dispatch (see Testing & QA).
 - **File naming:** lowercase kebab-case (`ctx-tool.ts`, `tool-policy-nag.ts`);
   default export is a camelCase function matching the filename (`ctxTool`,
   `toolPolicyNag`).
-- **Authoring shape:** default-exported `(pi: ExtensionAPI) => void` that
-  registers and/or subscribes; example (`agent/extensions/ctx-tool.ts:1668-1707`):
+- **Authoring shape:** default-exported `(pi: ExtensionAPI) => void` (or an async
+  factory, as in `bro.ts`) that registers and/or subscribes; example (`agent/extensions/ctx-tool.ts:1668-1707`):
   ```ts
   export default function ctxTool(pi: ExtensionAPI): void {
     pi.registerTool({
@@ -234,9 +237,8 @@ dispatch (see Testing & QA).
   `getAgentDir`, ...), `@oh-my-pi/pi-natives` (`glob`/`grep`, and `vcs` in `wt-tool.ts`), `@oh-my-pi/pi-ai`
   (the `DeveloperMessage` type used by `user-prompt-inject.ts` and the native `TypeSafeJudge`/`isJudgmentApi` used by
   `watchdog-agent.ts`), `@oh-my-pi/pi-tui`, `@oh-my-pi/pi-utils`. Extensions
-  resolve only omp's host packages (`pi-agent-core`, `pi-ai`, `pi-coding-agent`,
-  `pi-natives`, `pi-tui`, `pi-utils`); other `@oh-my-pi/*` packages such as
-  `pi-catalog` fail to load. Node built-ins (`node:fs`, `node:path`,
+  resolve only omp's host packages (`pi-agent-core`, `pi-ai`, `pi-catalog`, `pi-coding-agent`,
+  `pi-natives`, `pi-tui`, `pi-utils`); other `@oh-my-pi/*` packages fail to load. Node built-ins (`node:fs`, `node:path`,
   `node:crypto`, ...) are used heavily.
 - **Helper sessions pass `taskDepth: 1`:** every `createAgentSession` an
   extension builds for its own model calls (`bro.ts`, `doc-polish.ts`, `input-polish.ts`,
@@ -247,22 +249,24 @@ dispatch (see Testing & QA).
 - **Error handling:** hooks/tools are defensive — scan/read/glob failures degrade
   to empty/none or warnings rather than throwing (`ctx-tool.ts:454-470`,
   `ctx-tasklog.ts:239-267`). Model/provider request failures in `doc-polish.ts`
-  retry 3× then surface a structured `DocPolishRuntimeError` that carries the
-  provider's raw error text (`doc-polish.ts:285-303`); nothing redacts it.
+  get up to 3 attempts, then surface a `DocPolishRuntimeError` (an `Error` whose
+  message carries role, model, attempt count, and the provider's raw error text,
+  `doc-polish.ts:285-303`); nothing redacts it.
 - **State:** kept in the extension closure or module-level caches; durable state
   goes through session custom entries (e.g. `tool-policy-nag.ts` persists
   `mouriya.omp.tool-policy-nag.state` and rebuilds it on restore) or, for
   `ctx-tasklog.ts`, append-only files under the local root
   (`task-log/<agent-id>.md`).
-- **Schemas:** validate untrusted input at boundaries — imported `z` for internal
-  schemas, `pi.zod` for registered tool parameter schemas.
+- **Schemas:** validate untrusted input at boundaries — imported `z` and `pi.zod`
+  are both used, for internal schemas and registered tool parameter schemas.
 - **Style is not uniform** (tabs/double-quotes vs spaces/single-quotes across
   files) and there is no formatter. Preserve each file's local style; never
   restyle as part of a change.
 
 ### Subagent definitions (`agent/agents/*.md`)
 
-- YAML frontmatter: `name`, `description`, `spawns` (comma list). **No `model`
+- YAML frontmatter: `name`, `description`, and optionally `spawns` (comma list) or
+  `tools` (discussants `tools: read, grep, glob`, mentor `tools: []`). **No `model`
   field** — model binding lives in `config.yml`.
 - Prefer an explicit `spawns` allowlist over `"*"`; the **first** listed name is
   the silent default for an omitted `agent`. `task-high.md` is the only worker
@@ -304,8 +308,9 @@ dispatch (see Testing & QA).
   `subagent-todo`, `omp-config-autoupdate`, and the `commandcode-model-spec` compatibility fix) stay loaded,
   as listed in `README.md`, so `omp-light` also auto-updates when the switch is on.
   It overrides `extensions` to `[]` to drop `system-prompt-replace.ts`:
-  `disabledExtensions` only filters discovered `extension-module:<name>` entries,
-  never `config.yml` path entries. `omp-light.ts` then passes each live
+  `disabledExtensions` filters discovered `extension-module:<name>` entries, so it
+  cannot drop an extension listed as a file path (in `extensions` or `-e`); modules
+  found inside a listed directory are still filtered by name. `omp-light.ts` then passes each live
   `config.yml` `extensions` entry outside `extensions-last/` (the machine's own,
   such as `~/.claude`) with `-e`, a load lane the override does not reach, so
   only `extensions-last/` stays full-mode-only.
@@ -317,10 +322,10 @@ dispatch (see Testing & QA).
   `omp`; generated entries are not part of the repo copy set.
 - `agent/omp-config-update.ts` + `agent/extensions/omp-config-autoupdate.ts` —
   the updater and its startup hook. The hook is off by default:
-  `/omp-config-autoupdate [status|on|off]` writes the machine-local switch
+  `/omp-config-autoupdate` (`status` reads; `on`/`off` write) manages the machine-local switch
   `<agent dir>/omp-config-autoupdate.json` (`{"enabled": bool}`; missing or
   invalid = off), which neither the updater nor `/sync-omp-config` carries, and
-  which is read once per start. When on, the hook spawns the installed updater with
+  which the hook reads once per start. When on, the hook spawns the installed updater with
   `bun` from a managed `ctx.setTimeout` (an in-process fault must not take OMP
   down) and notifies only on changes or failures (up to date, a busy lock, and
   a failed fetch only log); `/omp-config-autoupdate run`
@@ -426,9 +431,11 @@ restart, whose first automatic apply (no `.omp-config-applied` yet) installs
   lock dir (`~/.omp/omp-config-update.lock`) sit one level above it.
 - The installed `omp-light` entry is not stored in `~/.omp/agent`: it is
   placed beside the resolved `omp` executable so the existing `PATH` finds it.
-- **Restart required:** `APPEND_SYSTEM.md`, extensions, and plugins take effect on
-  the next `omp` start (`.omp/commands/update-omp.md`, 生效时机); agent `*.md` edits
-  apply on next spawn without restart. An automatic update lands during the
+- **Restart required:** `APPEND_SYSTEM.md`, extension code, new extensions, and plugins take effect on
+  the next `omp` start (`.omp/commands/update-omp.md`, 生效时机); `config.yml`
+  hot-reloads, so `extensions` / `disabledExtensions` changes suspend or resume
+  already-loaded extensions live, and agent `*.md` edits apply on next spawn
+  without restart. An automatic update lands during the
   session that started it, so that session can run new data under old
   extension code until restart.
 - **Never commit** (`.gitignore` covers `agent/{agent,history,models}.db*`,
@@ -449,10 +456,11 @@ restart, whose first automatic apply (no `.omp-config-applied` yet) installs
   eslint/prettier/biome). Nothing repo-local type-checks the `.ts` extensions.
 - **The configuration check (`ci/check.ts`, workflow `config-check`)** proves the
   repo config installs and loads on the latest omp: updater apply with all plugins,
-  then one real prompt per mode on a free model, failing on any stderr line,
+  then one real prompt per mode on a free model, failing on any session stderr line,
   `extension_error`, failed reply, or omp log warn/error outside the listed host
-  noise. It reports only; nothing blocks a merge. It calls no tools and spawns no
-  subagents, so it does not prove tool, subagent, or TUI behavior (`ci/README.md`,
+  noise. It reports only; whether it blocks a merge depends on GitHub branch
+  protection. Its prompt asks for no tools or subagents but does not disable or
+  assert them, so it does not prove tool, subagent, or TUI behavior (`ci/README.md`,
   覆盖边界).
 - **`plugin-audit.sh` validates the plugin *list*, not extension code** — it
   cannot prove anything about a `.ts` edit.
@@ -468,5 +476,6 @@ restart, whose first automatic apply (no `.omp-config-applied` yet) installs
 - If runtime verification isn't possible, say so explicitly — parse-clean +
   `cmp`-identical does not mean correct.
 - **Credential safety:** `/migrate-omp-keys` copies only the `auth_credentials`
-  table, backs up the remote DB with SQLite `.backup`, requires confirmation, and
-  never prints credential data. Never route secrets through the repo snapshot.
+  table (and clears the remote `auth_credential_blocks` and
+  `auth_credential_refresh_leases`), backs up the remote DB with SQLite `.backup`,
+  requires confirmation, and never prints credential data. Never route secrets through the repo snapshot.

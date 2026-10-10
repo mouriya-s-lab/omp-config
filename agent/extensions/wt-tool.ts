@@ -89,8 +89,8 @@ const CREATE_DESCRIPTION = [
 const REMOVE_DESCRIPTION = [
 	"Remove the worktree this session is in and move the session back to the repository's main checkout. The branch is kept.",
 	"Use this tool to leave a session worktree; never remove or leave worktrees yourself with `git worktree` or by changing directories.",
-	"Call it twice. First without `confirm`: a dry run that changes nothing and reports whether removal is safe, every staged, unstaged, untracked and ignored file it would delete, branch commits not in the main checkout, anything blocking removal, and a `confirm` value.",
-	"Read the report and decide. To remove, call again with that `confirm` value; it only works while the worktree is exactly as reported, so any change in it means checking again.",
+	"Call it twice. First without `confirm`: a dry run that changes nothing and reports whether removal is safe, the staged, unstaged, untracked and ignored entries it would delete (up to 50 per category, with the total), branch commits not in the main checkout, anything blocking removal, and a `confirm` value.",
+	"Read the report and decide. To remove, call again with that `confirm` value; it stops matching once files are added, removed or edited (by size or modification time), HEAD or the branch moves, or the ignored-entry list changes, and then you must check again.",
 	"The removal happens after your turn ends: end your turn right after the confirming call, without further tool calls. It is checked once more first; any change or blocker stops it. The result arrives as the next message.",
 ].join("\n");
 
@@ -129,6 +129,25 @@ type WorktreeCheck = {
 };
 
 type CheckResult = { readonly kind: "ok"; readonly check: WorktreeCheck } | { readonly kind: "error"; readonly reason: string };
+
+type Recheck = { readonly kind: "ok"; readonly check: WorktreeCheck } | { readonly kind: "stop"; readonly why: string };
+
+/** One `git status --porcelain=v1` entry: index status `x`, worktree status `y`, and the path (`from -> to` for renames/copies). */
+type StatusEntry = { readonly x: string; readonly y: string; readonly shown: string };
+
+/** Parse `git status --porcelain=v1 -z`; a rename/copy entry is followed by its source path as a separate field. */
+const parsePorcelain = (raw: string): StatusEntry[] => {
+	const fields = raw.split("\0");
+	const entries: StatusEntry[] = [];
+	for (let i = 0; i < fields.length; i++) {
+		const field = fields[i];
+		if (field.length < 4) continue;
+		const [x, y, file] = [field[0], field[1], field.slice(3)];
+		const shown = x === "R" || x === "C" ? `${fields[++i]} -> ${file}` : file;
+		entries.push({ x, y, shown });
+	}
+	return entries;
+};
 
 type Request =
 	| { readonly kind: "create"; readonly sessionId: string; readonly branch: string | undefined }
@@ -335,23 +354,11 @@ export default function wtTool(pi: ExtensionAPI): void {
 			const record: SessionWorktree = { path: worktree, branch, sourceCwd: mainDir, baseCommit: tip, keptChanges: true };
 
 			const before = await fingerprint(record, await ignoredEntries(worktree));
-			const status = (await git(worktree, ["status", "--porcelain=v1", "-z", "--untracked-files=all"])).split("\0");
-			const staged: string[] = [];
-			const unstaged: string[] = [];
-			const untracked: string[] = [];
-			for (let i = 0; i < status.length; i++) {
-				const entry = status[i];
-				if (entry.length < 4) continue;
-				const [x, y, file] = [entry[0], entry[1], entry.slice(3)];
-				// Renames and copies are followed by their source path as a separate entry.
-				const shown = x === "R" || x === "C" ? `${status[++i]} -> ${file}` : file;
-				if (x === "?" && y === "?") {
-					untracked.push(shown);
-					continue;
-				}
-				if (x !== " ") staged.push(`${x} ${shown}`);
-				if (y !== " ") unstaged.push(`${y} ${shown}`);
-			}
+			const entries = parsePorcelain(await git(worktree, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]));
+			const untracked = entries.filter(entry => entry.x === "?").map(entry => entry.shown);
+			const tracked = entries.filter(entry => entry.x !== "?");
+			const staged = tracked.filter(entry => entry.x !== " ").map(entry => `${entry.x} ${entry.shown}`);
+			const unstaged = tracked.filter(entry => entry.y !== " ").map(entry => `${entry.y} ${entry.shown}`);
 			const ignored = await ignoredEntries(worktree);
 			const mainHead = (await git(mainDir, ["rev-parse", "HEAD"])).trim();
 			const unmergedCommits = (await git(worktree, ["log", "--format=%h %s", `${mainHead}..${tip}`]))
@@ -379,15 +386,18 @@ export default function wtTool(pi: ExtensionAPI): void {
 		}
 	};
 
-	/** Re-inspect a confirmed worktree; undefined when it is unchanged and unblocked, else why not. */
-	const recheck = async (ctx: ExtensionContext, confirmed: WorktreeCheck): Promise<string | undefined> => {
+	/** Re-inspect a confirmed worktree: its current check when unchanged and unblocked, else why not. */
+	const recheck = async (ctx: ExtensionContext, confirmed: WorktreeCheck): Promise<Recheck> => {
 		const current = await inspect(ctx, confirmed.worktree);
-		if (current.kind === "error") return current.reason;
+		if (current.kind === "error") return { kind: "stop", why: current.reason };
 		if (current.check.confirm !== confirmed.confirm) {
-			return `the worktree changed since the check (a file was added, removed or edited, or HEAD or the branch moved; edits inside a listed file count even when the lists look the same). Current state:\n${formatCheck(current.check)}`;
+			return {
+				kind: "stop",
+				why: `the worktree changed since the check (a file was added, removed or edited, or HEAD or the branch moved). Current state:\n${formatCheck(current.check)}`,
+			};
 		}
-		if (current.check.blockers.length > 0) return `it is in use:\n${current.check.blockers.join("\n")}`;
-		return undefined;
+		if (current.check.blockers.length > 0) return { kind: "stop", why: `it is in use:\n${current.check.blockers.join("\n")}` };
+		return { kind: "ok", check: current.check };
 	};
 
 	const reset = (ctx: ExtensionContext): void => {
@@ -413,7 +423,7 @@ export default function wtTool(pi: ExtensionAPI): void {
 		const stop = (why: string): string =>
 			`Worktree removal stopped before anything changed: ${why}\nThe session is still in \`${mode.sessionManager.getCwd()}\` and \`${check.worktree}\` is untouched.`;
 		const beforeMove = await recheck(ctx, check);
-		if (beforeMove !== undefined) return stop(beforeMove);
+		if (beforeMove.kind === "stop") return stop(beforeMove.why);
 
 		const shown = await runSlashCommand(mode, `/move ${check.mainDir}`);
 		const cwd = await realpathOr(mode.sessionManager.getCwd());
@@ -423,23 +433,41 @@ export default function wtTool(pi: ExtensionAPI): void {
 		const moved = `The session moved to the main checkout \`${check.mainDir}\`. Continue the task there.`;
 
 		const afterMove = await recheck(ctx, check);
-		if (afterMove !== undefined) return `${moved}\nThe worktree was NOT removed: ${afterMove}\n\`${check.worktree}\` is untouched.`;
+		if (afterMove.kind === "stop") return `${moved}\nThe worktree was NOT removed: ${afterMove.why}\n\`${check.worktree}\` is untouched.`;
 
-		const removed = await vcs.requireGit(check.mainDir).worktreeRemove(check.worktree, true);
-		const exists = await fs.stat(check.worktree).then(
-			() => true,
-			() => false,
-		);
-		pi.logger.info("wt_remove: removal ran", { worktree: check.worktree, removed, exists });
-		if (!removed || exists) {
-			return `${moved}\nRemoving the worktree failed: git ${removed ? "reported success but the directory still exists" : "refused"}; \`${check.worktree}\` ${exists ? "still exists" : "is gone"}.`;
+		try {
+			const removed = await vcs.requireGit(check.mainDir).worktreeRemove(check.worktree, true);
+			const exists = await fs.stat(check.worktree).then(
+				() => true,
+				() => false,
+			);
+			pi.logger.info("wt_remove: removal ran", { worktree: check.worktree, removed, exists });
+			if (!removed || exists) {
+				return `${moved}\nRemoving the worktree failed: the removal ${removed ? "reported success but the directory still exists" : "was refused"}; \`${check.worktree}\` ${exists ? "still exists" : "is gone"}.`;
+			}
+		} catch (error) {
+			const exists = await fs.stat(check.worktree).then(
+				() => true,
+				() => false,
+			);
+			return `${moved}\nRemoving the worktree failed: ${error instanceof Error ? error.message : String(error)}; \`${check.worktree}\` ${exists ? "still exists" : "is gone"}.`;
 		}
-		const branchKept = Boolean(await vcs.requireGit(check.mainDir).resolveRef(`refs/heads/${check.branch}`));
+		const removedText = `${moved}\nRemoved the worktree \`${check.worktree}\`.`;
+		const branchKept = await vcs
+			.requireGit(check.mainDir)
+			.resolveRef(`refs/heads/${check.branch}`)
+			.then(
+				ref => Boolean(ref),
+				() => undefined,
+			);
+		if (branchKept === undefined) return `${removedText} Could not check whether branch \`${check.branch}\` still exists.`;
+		if (!branchKept) return `${removedText} Branch \`${check.branch}\` no longer exists.`;
+		const unmerged = afterMove.check.unmergedCommits;
 		const commits =
-			check.unmergedCommits.length > 0
-				? ` It has ${check.unmergedCommits.length} commit(s) not reachable from the main checkout's HEAD.`
-				: " All its commits are reachable from the main checkout's HEAD.";
-		return `${moved}\nRemoved the worktree \`${check.worktree}\`. Branch \`${check.branch}\` ${branchKept ? "is kept." : "no longer exists."}${branchKept ? commits : ""}`;
+			unmerged.length > 0
+				? `It has ${unmerged.length} commit(s) not reachable from the main checkout's HEAD.`
+				: "All its commits are reachable from the main checkout's HEAD.";
+		return `${removedText} Branch \`${check.branch}\` is kept. ${commits}`;
 	};
 
 	const execute = async (ctx: ExtensionContext, request: Request): Promise<void> => {
@@ -510,9 +538,7 @@ export default function wtTool(pi: ExtensionAPI): void {
 		const mainDir = await realpathOr(linked.primaryRoot);
 		const branch = (await git(worktree, ["branch", "--show-current"])).trim();
 		const head = (await git(worktree, ["log", "-1", "--format=%h %s"])).trim();
-		const changed = (await git(worktree, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]))
-			.split("\0")
-			.filter(entry => entry.length >= 4 && !/^[RC]/.test(entry)).length;
+		const changed = parsePorcelain(await git(worktree, ["status", "--porcelain=v1", "-z", "--untracked-files=all"])).length;
 		const capture = captureInteractiveMode(ctx);
 		const cleanSource = capture.kind === "ok" && cfgWorktreeCleanSource.get(capture.mode.settings) === true;
 		const report = [
@@ -611,12 +637,12 @@ export default function wtTool(pi: ExtensionAPI): void {
 			const check = result.check;
 			if (confirm === undefined) {
 				return text(
-					`Check only; nothing changed.\n${formatCheck(check)}\nTo remove, call ${REMOVE_TOOL} again with confirm="${check.confirm}". Any change to the worktree invalidates this value.`,
+					`Check only; nothing changed.\n${formatCheck(check)}\nTo remove, call ${REMOVE_TOOL} again with confirm="${check.confirm}". The value stops matching once the worktree changes.`,
 				);
 			}
 			if (confirm !== check.confirm) {
 				return fail(
-					`${REMOVE_TOOL}: confirm does not match the worktree's current state, so nothing was queued. Either the value is from another check, or the worktree changed since the check: a file was added, removed or edited, or HEAD or the branch moved; edits inside a listed file count even when the lists look the same. Current state:\n${formatCheck(check)}`,
+					`${REMOVE_TOOL}: confirm does not match the worktree's current state, so nothing was queued. Either the value is from another state, or the worktree changed since the check: a file was added, removed or edited, HEAD or the branch moved, or the ignored-entry list changed. Current state:\n${formatCheck(check)}`,
 				);
 			}
 			if (check.blockers.length > 0) {

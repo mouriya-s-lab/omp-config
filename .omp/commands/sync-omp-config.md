@@ -8,7 +8,7 @@ description: 把本机 ~/.omp/agent 配置和 pi-bansos 状态同步进本仓库
 
 ## 同步范围
 
-本机 `~/.omp/agent` 与仓库 `agent/` 按同名一一对应：`config.yml`、`APPEND_SYSTEM.md`、`APPEND_SYSTEM_MODEL.md`、`thinking-translator.json`、`system-prompt-replace.json`、`PROMPT-INJECT-*.md`、`config-light.yml`、`APPEND_SYSTEM_LIGHT.md`、`omp-light.ts`、`omp-config-update.ts`、`agents/`、`extensions/*.ts`、`extensions-last/*.ts`、`extensions/lang-nag.json`、`extensions/input-polish.json`。这个范围与 `agent/omp-config-update.ts` 的 `managedPlain` 和 `STRUCTURED` 一致，改一边就要改另一边。本机 `settings.json` 不在范围内：`config.yml` 存在时 OMP 不读它。
+本机 `~/.omp/agent` 与仓库 `agent/` 按同名一一对应：`config.yml`、`APPEND_SYSTEM.md`、`APPEND_SYSTEM_MODEL.md`、`thinking-translator.json`、`system-prompt-replace.json`、`PROMPT-INJECT-*.md`、`config-light.yml`、`APPEND_SYSTEM_LIGHT.md`、`omp-light.ts`、`omp-config-update.ts`、`agents/`、`extensions/*.ts`、`extensions-last/*.ts`、`extensions/lang-nag.json`、`extensions/input-polish.json`。这个范围与 `agent/omp-config-update.ts` 的 `managedPlain` 和 `STRUCTURED` 一致，改一边就要改另一边。本机 `settings.json` 不在范围内：`config.yml` 存在时 OMP 不再把它的 `extensions` 当扩展包根目录，但其中的 TS/JS 扩展模块条目照样加载，属于本机。
 
 另有一项不在 `~/.omp/agent` 下：`pi-bansos` 插件的状态文件 `~/.pi/agent/pi-bansos-relay-state.json` 对应仓库 `pi/agent/pi-bansos-relay-state.json`。它由 `/bansos` 命令写入，保存 relay 开关、当前 relay、已存 relay 列表和状态栏显示（`statusBar`），不含凭据。本机没有这个文件时（从未执行过 `/bansos` 的改动类子命令）不算“本机已删除”，仓库保持原样并在报告里说明。
 
