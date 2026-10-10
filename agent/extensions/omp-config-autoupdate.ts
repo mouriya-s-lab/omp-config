@@ -17,9 +17,9 @@ import { join } from "node:path";
 // WHAT. When on, once per process, in the root session's `session_start`, runs
 // `bun <agent dir>/omp-config-update.ts auto --agent-dir <agent dir> --json`
 // as a child process. That script fetches origin into its own clone and, when
-// the fetched commit differs from the one last applied to this agent dir,
-// applies it (see the header of omp-config-update.ts for what it touches and
-// what it never touches).
+// the fetch succeeds and the fetched commit differs from the one last applied
+// to this agent dir, applies it (see the header of omp-config-update.ts for
+// what it touches and what it never touches). A failed fetch applies nothing.
 //
 // WHY A CHILD PROCESS. Extensions run in-process without isolation; an updater
 // fault must never take OMP down. The child is spawned from a managed
@@ -70,8 +70,9 @@ type ApplyReport = {
 
 type AutoResult =
 	| { readonly kind: "busy" }
-	| { readonly kind: "up-to-date"; readonly commit: string; readonly fetchError?: string }
-	| { readonly kind: "applied"; readonly commit: string; readonly fetchError?: string; readonly report: ApplyReport }
+	| { readonly kind: "offline"; readonly error: string }
+	| { readonly kind: "up-to-date"; readonly commit: string }
+	| { readonly kind: "applied"; readonly commit: string; readonly report: ApplyReport }
 	| { readonly kind: "failed"; readonly error: string };
 
 /** One run per process: child sessions share this module and must not re-run it. */
@@ -176,28 +177,29 @@ export default function ompConfigAutoupdate(pi: ExtensionAPI): void {
 				case "busy":
 					pi.logger.info("omp-config: another update is running; skipped");
 					return;
+				case "offline":
+					pi.logger.info(`omp-config: fetch failed, not updated: ${result.error}`);
+					return;
 				case "up-to-date":
-					pi.logger.info(`omp-config: up to date at ${result.commit.slice(0, 7)}${result.fetchError ? ` (fetch failed: ${result.fetchError})` : ""}`);
+					pi.logger.info(`omp-config: up to date at ${result.commit.slice(0, 7)}`);
 					return;
 				case "failed":
 					notify(ctx, `omp-config: auto-update failed: ${result.error}`, "warning");
 					return;
 				case "applied": {
 					const { report } = result;
-					// Offline: the applied commit came from the clone's cache, not a fresh fetch.
-					const cached = result.fetchError ? ` (from cached clone; fetch failed: ${result.fetchError})` : "";
 					const changed = report.written.length + report.deleted.length + report.pluginsInstalled.length;
 					if (report.errors.length > 0) {
-						notify(ctx, `omp-config: applied ${result.commit.slice(0, 7)}${cached} with ${report.errors.length} error(s), will retry next start: ${report.errors[0]}`, "warning");
+						notify(ctx, `omp-config: applied ${result.commit.slice(0, 7)} with ${report.errors.length} error(s), will retry next start: ${report.errors[0]}`, "warning");
 						return;
 					}
 					if (changed === 0) {
-						pi.logger.info(`omp-config: ${result.commit.slice(0, 7)} applied${cached}, host already matched`);
+						pi.logger.info(`omp-config: ${result.commit.slice(0, 7)} applied, host already matched`);
 						return;
 					}
 					notify(
 						ctx,
-						`omp-config: updated to ${result.commit.slice(0, 7)}${cached} (${report.written.length} written, ${report.deleted.length} deleted, ${report.pluginsInstalled.length} plugin(s) installed)${report.restartNeeded ? "; restart OMP to load extensions/APPEND_SYSTEM/plugins" : ""}`,
+						`omp-config: updated to ${result.commit.slice(0, 7)} (${report.written.length} written, ${report.deleted.length} deleted, ${report.pluginsInstalled.length} plugin(s) installed)${report.restartNeeded ? "; restart OMP to load extensions/APPEND_SYSTEM/plugins" : ""}`,
 						"info",
 					);
 					return;
