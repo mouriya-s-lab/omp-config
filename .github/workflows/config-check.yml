@@ -31,4 +31,6 @@ jobs:
         with:
           bun-version: latest
       - name: Check
-        run: bun ci/check.ts
+        run: bun ci/check.ts; echo "check exit=$?"; exit 1
+        env:
+          CI_FREE_BASE_URL: https://ci-provider-endpoint-does-not-exist.invalid/api/gateway
