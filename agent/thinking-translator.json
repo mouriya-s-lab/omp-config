@@ -1,10 +1,12 @@
 {
   "enabled": true,
   "targetLanguage": "Simplified Chinese",
-  "translatorModel": {
-    "provider": "bansos",
-    "id": "muse-spark-1.3-contributor-free",
-    "effort": "minimal"
-  },
+  "translatorModels": [
+    {
+      "provider": "bansos",
+      "id": "muse-spark-1.3-contributor-free",
+      "effort": "minimal"
+    }
+  ],
   "trace": false
 }

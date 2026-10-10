@@ -131,8 +131,10 @@ function configuredModels(): ModelRef[] {
 		const model = readJson(rel).model;
 		if (typeof model === "string") selectors.push(model);
 	}
-	const translator = readJson("agent/thinking-translator.json").translatorModel;
-	if (isMapping(translator) && typeof translator.provider === "string" && typeof translator.id === "string") selectors.push(`${translator.provider}/${translator.id}`);
+	const translators = readJson("agent/thinking-translator.json").translatorModels;
+	for (const translator of Array.isArray(translators) ? translators : []) {
+		if (isMapping(translator) && typeof translator.provider === "string" && typeof translator.id === "string") selectors.push(`${translator.provider}/${translator.id}`);
+	}
 	const refs = new Map<string, ModelRef>();
 	for (const selector of selectors) {
 		const ref = parseSelector(selector);
