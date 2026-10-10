@@ -13,9 +13,10 @@ definitions, local TypeScript extensions, the agent-root
 `system-prompt-replace.json` for `extensions-last/system-prompt-replace.ts`, the `pi-bansos`
 plugin state (`pi/agent/pi-bansos-relay-state.json`), the plugin install
 list, the repo → machine updater (`agent/omp-config-update.ts`) with its
-startup hook, and the maintenance commands that move state between this repo
+startup hook, the maintenance commands that move state between this repo
 and a machine's live `~/.omp/agent` (plus `~/.pi/agent` for the `pi-bansos`
-state) and install its PATH launcher. Runtime
+state) and install its PATH launcher, and the configuration check (CI) that
+runs the config in a real omp session (`ci/`). Runtime
 state (databases, sessions, caches, credentials) is deliberately excluded.
 
 The repo is consumed by `omp` in two directions:
@@ -154,6 +155,7 @@ flowchart LR
 | `pi/agent/pi-bansos-relay-state.json` | `pi-bansos` plugin state (relay on/off, relay URL, saved relays, `statusBar`), read by the plugin from `~/.pi/agent/`, not `~/.omp/agent`. Written by the plugin's `/bansos` command; no credentials. Portable regular item in both directions. |
 | `.omp/commands/` | Project-level slash-command definitions run from repo root. |
 | repo root | `install-plugins.sh`, `plugin-audit.sh`, `README.md` (authoritative, in Chinese). |
+| `ci/`, `.github/workflows/config-check.yml` | The configuration check (CI): `ci/check.ts` installs the latest omp in a throwaway HOME, applies the repo with its own updater (plugins included), runs one real RPC session per mode (full, `omp-light`) on a keyless free model, and reports every stderr line, `extension_error`, and omp log warn/error. `ci/README.md` holds its design, criteria, and coverage boundary. |
 | `agent/config-light.yml`, `agent/APPEND_SYSTEM_LIGHT.md`, `agent/omp-light.ts` | Light-mode assets are included in both sync directions; the updater copies them to `~/.omp/agent` and installs the PATH entry beside the resolved `omp`. Generated `omp-light` / `omp-light.cmd` entries are not repo files. |
 | `agent/omp-config-update.ts` | The repo → machine updater (Bun script, also a managed item copied to `~/.omp/agent`). `auto` mode runs at every start when the machine's auto-update switch is on; `apply --source <dir> [--check]` backs `/update-omp`. Its header documents what it touches, deletes, and never touches. |
 
@@ -185,7 +187,10 @@ omp plugin list --json        # confirm plugin names/versions/enabled
 git status --short            # confirm no runtime/db/cache files leaked into the repo
 ```
 
-There is **no** `build`/`lint`/`test` command — this repo has none (see Testing & QA).
+There is no `build`/`lint`/unit-test command. The configuration check runs locally with
+`bun ci/check.ts` (writes only a temp dir; exit 0 clean, 1 diagnostics, 2 free model
+unavailable) and in GitHub Actions on push to `master`, pull requests, daily, and on
+dispatch (see Testing & QA).
 
 ## Code Conventions & Common Patterns
 
@@ -439,9 +444,16 @@ restart, whose first automatic apply (no `.omp-config-applied` yet) installs
 
 ## Testing & QA
 
-- **No formal test suite, no CI, no hooks, no type-check/lint/format config**
-  (no `*.test.*`/`*.spec.*`, `.github/workflows`, `tsconfig.json`, `package.json`,
+- **No unit-test suite, no hooks, no type-check/lint/format config**
+  (no `*.test.*`/`*.spec.*`, `tsconfig.json`, `package.json`,
   eslint/prettier/biome). Nothing repo-local type-checks the `.ts` extensions.
+- **The configuration check (`ci/check.ts`, workflow `config-check`)** proves the
+  repo config installs and loads on the latest omp: updater apply with all plugins,
+  then one real prompt per mode on a free model, failing on any stderr line,
+  `extension_error`, failed reply, or omp log warn/error outside the listed host
+  noise. It reports only; nothing blocks a merge. It calls no tools and spawns no
+  subagents, so it does not prove tool, subagent, or TUI behavior (`ci/README.md`,
+  覆盖边界).
 - **`plugin-audit.sh` validates the plugin *list*, not extension code** — it
   cannot prove anything about a `.ts` edit.
 - **How to validate a change here:**
