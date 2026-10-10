@@ -10,7 +10,8 @@
 // 2: only the free model provider failed, so the configuration is unverified.
 
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -43,6 +44,9 @@ type Phase = "install" | "apply" | "full session" | "light session" | "omp log" 
 
 /** environment: the CI host or omp install broke; config: the configuration; provider: the free model service. */
 type Diagnostic = { readonly kind: "environment" | "config" | "provider"; readonly phase: Phase; readonly text: string };
+
+/** One distinct fault: every diagnostic whose normalized text and kind are the same, with where it showed up. */
+type Finding = { readonly hash: string; readonly kind: Diagnostic["kind"]; readonly text: string; readonly phases: Map<Phase, number> };
 
 type ModelRef = { readonly provider: string; readonly id: string };
 
@@ -320,7 +324,12 @@ function readLogs(home: string, out: Diagnostic[], ignored: string[]): void {
 			if (!isMapping(record) || typeof record.message !== "string" || (record.level !== "warn" && record.level !== "error")) continue;
 			const entry = record as LogRecord;
 			const { timestamp: _t, pid: _p, level, message, ...context } = entry;
-			const text = `${level}: ${message}${Object.keys(context).length ? ` ${JSON.stringify(context)}` : ""}`;
+			// A `{path, error}` record is rendered the way omp prints the same fault on stderr, so both dedupe to one finding.
+			const keys = Object.keys(context);
+			const text =
+				keys.length === 2 && typeof context.path === "string" && typeof context.error === "string"
+					? `${message} ${context.path}: ${context.error}`
+					: `${message}${keys.length ? ` ${JSON.stringify(context)}` : ""}`;
 			const host = level === "warn" ? HOST_LOG_WARNINGS.find(rule => rule.match(entry)) : undefined;
 			if (host) ignored.push(`${text} — ${host.reason}`);
 			// A record whose own error is a free-model service failure is the provider's, not the configuration's.
@@ -331,10 +340,48 @@ function readLogs(home: string, out: Diagnostic[], ignored: string[]): void {
 
 // --- report --------------------------------------------------------------------
 
-function report(facts: readonly string[], diagnostics: readonly Diagnostic[], ignored: readonly string[]): number {
+/** Rewrites run-specific parts (temp dirs, module cache-busters) so one fault reads, and hashes, the same in every source and run. */
+function normalizer(root: string, home: string): (text: string) => string {
+	// Real paths first: on macOS /private/var/… contains /var/… and must be replaced before it.
+	const prefixes: [string, string][] = [
+		[realpathSync(home), "~"],
+		[home, "~"],
+		[realpathSync(root), "<tmp>"],
+		[root, "<tmp>"],
+	];
+	return text => prefixes.reduce((current, [path, label]) => current.replaceAll(path, label), text).replace(/\?mtime=\d+/g, "");
+}
+
+function findings(diagnostics: readonly Diagnostic[], normalize: (text: string) => string): Finding[] {
+	const byHash = new Map<string, Finding>();
+	for (const d of diagnostics) {
+		const text = normalize(d.text);
+		const hash = createHash("sha256").update(`${d.kind}\0${text}`).digest("hex").slice(0, 12);
+		const finding = byHash.get(hash) ?? { hash, kind: d.kind, text, phases: new Map<Phase, number>() };
+		finding.phases.set(d.phase, (finding.phases.get(d.phase) ?? 0) + 1);
+		byHash.set(hash, finding);
+	}
+	// omp cuts long stderr lines with "…"; a cut line is the same fault as the one full text it is a prefix of.
+	// A cut inside an absolute path leaves a fragment normalization cannot rewrite, so compare up to where that path began.
+	for (const cut of [...byHash.values()].filter(f => f.text.endsWith("…"))) {
+		const prefix = cut.text.slice(0, -1).replace(/\/[^\s'"]*$/, "");
+		const candidates = [...byHash.values()].filter(f => f !== cut && f.kind === cut.kind && f.text.startsWith(prefix));
+		if (candidates.length !== 1) continue;
+		const [full] = candidates;
+		for (const [phase, count] of cut.phases) full.phases.set(phase, (full.phases.get(phase) ?? 0) + count);
+		byHash.delete(cut.hash);
+	}
+	return [...byHash.values()];
+}
+
+function report(facts: readonly string[], diagnostics: readonly Diagnostic[], ignored: readonly string[], normalize: (text: string) => string): number {
 	const failed = diagnostics.some(d => d.kind !== "provider");
 	const providerOnly = !failed && diagnostics.length > 0;
 	const verdict = failed ? "FAIL: configuration or environment diagnostics" : providerOnly ? "FAIL: free model provider unavailable; configuration not verified" : "PASS: no diagnostics";
+	const distinct = findings(diagnostics, normalize);
+	const ignoredCounts = new Map<string, number>();
+	for (const text of ignored.map(normalize)) ignoredCounts.set(text, (ignoredCounts.get(text) ?? 0) + 1);
+	const code = (text: string): string => `\`${text.replaceAll("`", "'")}\``;
 	const markdown = [
 		"# omp-config check",
 		"",
@@ -342,14 +389,16 @@ function report(facts: readonly string[], diagnostics: readonly Diagnostic[], ig
 		"",
 		`## ${verdict}`,
 		"",
-		...(diagnostics.length ? diagnostics.map(d => `- **${d.phase}** (${d.kind}): \`${d.text.replaceAll("`", "'")}\``) : ["- none"]),
-		...(ignored.length ? ["", "## Host-environment log warnings (not counted)", "", ...ignored.map(text => `- \`${text.replaceAll("`", "'")}\``)] : []),
+		...(distinct.length
+			? distinct.map(f => `- \`${f.hash}\` **${f.kind}** — ${[...f.phases].map(([phase, count]) => `${phase} ×${count}`).join(", ")}: ${code(f.text)}`)
+			: ["- none"]),
+		...(ignoredCounts.size ? ["", "## Host-environment log warnings (not counted)", "", ...[...ignoredCounts].map(([text, count]) => `- ×${count} ${code(text)}`)] : []),
 		"",
 	].join("\n");
 	process.stdout.write(markdown);
 	if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, markdown);
 	if (process.env.GITHUB_ACTIONS === "true") {
-		for (const d of diagnostics) process.stdout.write(`::error title=${d.phase} (${d.kind})::${d.text.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A")}\n`);
+		for (const f of distinct) process.stdout.write(`::error title=${f.hash} (${f.kind})::${f.text.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A")}\n`);
 	}
 	return failed ? 1 : providerOnly ? 2 : 0;
 }
@@ -357,6 +406,7 @@ function report(facts: readonly string[], diagnostics: readonly Diagnostic[], ig
 async function main(): Promise<number> {
 	const root = mkdtempSync(join(process.env.RUNNER_TEMP || tmpdir(), "omp-config-check-"));
 	const env = isolatedEnv(root);
+	const normalize = normalizer(root, env.HOME);
 	const work = join(root, "work");
 	const diagnostics: Diagnostic[] = [];
 	const ignored: string[] = [];
@@ -365,10 +415,10 @@ async function main(): Promise<number> {
 	const proxy = startShadowProxy(shadowRequests);
 	try {
 		const version = installOmp(env, work, diagnostics);
-		if (version === undefined) return report(facts, diagnostics, ignored);
+		if (version === undefined) return report(facts, diagnostics, ignored, normalize);
 		facts.push(`installed: ${version}`);
 		const applied = applyConfig(env, work, diagnostics);
-		if (applied === undefined) return report(facts, diagnostics, ignored);
+		if (applied === undefined) return report(facts, diagnostics, ignored, normalize);
 		facts.push(`updater wrote ${applied.written.length} entries; plugins installed: ${applied.pluginsInstalled.join(", ") || "none"}`);
 		const shadows = configuredModels();
 		facts.push(`configured models shadowed onto the free model: ${shadows.map(ref => `${ref.provider}/${ref.id}`).join(", ")}`);
@@ -387,7 +437,7 @@ async function main(): Promise<number> {
 		readLogs(env.HOME, diagnostics, ignored);
 		for (const request of shadowRequests) if (request.status >= 400) diagnostics.push({ kind: "provider", phase: "shadow proxy", text: `${request.provider}/${request.model} → HTTP ${request.status}` });
 		facts.push(`shadowed models requested: ${shadowRequests.map(r => `${r.provider}/${r.model}`).join(", ") || "none"}`);
-		return report(facts, diagnostics, ignored);
+		return report(facts, diagnostics, ignored, normalize);
 	} finally {
 		proxy.stop(true);
 		if (process.env.CI_KEEP_ROOT === "1") process.stderr.write(`kept ${root}\n`);
