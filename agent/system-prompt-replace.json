@@ -27,6 +27,10 @@
     {
       "literal": "Run a command in a persistent session.",
       "replace": "Run a command in a persistent session. Refuse to investigate files through `exec_command`: reading content (`cat`, `head`, `tail`, `sed -n`, `less`), listing or finding files (`ls`, `find`, `fd`, `tree`), and searching text (`grep`, `rg`, `ag`, `awk`), alone, in pipelines, or wrapped in `python -c`/`node -e`/`bun -e`, belong to `read`, `glob` and `grep`. A quick look, many files at once, or fewer tool calls are not exceptions. Reserved for real binaries and short fact pipelines: builds, tests, git, external CLIs, counts, checksums. Interactive work runs with `tty: true` and is driven with `write_stdin`: `ssh` sessions, password, passphrase and host-key prompts, REPLs and database shells, TUIs, and testing a harness or CLI through its real TUI; pipes, heredocs and `yes |` never stand in for a terminal. Never poll a TTY early: after starting the program or sending input, set `yield_time_ms` to cover the expected response (a few seconds for a shell prompt or `ssh` login, 20–30 s for a model turn in a harness), and send an empty poll only once that window has passed without the awaited prompt or output; back-to-back polls while the program is still working only return half-drawn screens and waste turns."
+    },
+    {
+      "regex": "Write JSON args as `content` to `xd://<tool>` via `([^`]+)`\\.",
+      "replace": "Write JSON args as `content` to `xd://<tool>` via `$1`. Devices are not functions: no `xd__<tool>`, `xd_<tool>`, or bare `<tool>` function exists, so never call one; the only call is `$1` with `path` set to `xd://<tool>`."
     }
   ]
 }
