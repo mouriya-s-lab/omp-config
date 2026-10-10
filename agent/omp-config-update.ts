@@ -28,16 +28,20 @@
 //
 // DELETIONS. Only in `auto`, and only what git says the repo dropped between
 // the applied commit and the new one: managed files deleted in that range,
-// and structured keys present in the old repo version but not the new one.
-// Without the old commit (first run, gc'd object) nothing is deleted.
+// and structured keys present in the old repo version but not the new one
+// (a dropped map loses only the repo's old keys; it is removed only if that
+// leaves it empty). Without the old commit (first run, gc'd object) nothing
+// is deleted.
 //
 // SAFETY. Every structured source must parse to a mapping before any write;
-// one invalid source aborts the whole apply. Writes go to a temp file in the
+// one invalid source aborts the whole apply. A host structured file that does
+// not parse is left untouched and reported as an error. Writes go to a temp file in the
 // target's directory and are renamed over it. Order: plain files, JSON,
 // config.yml, deletions. Any error leaves the applied marker unchanged, so
 // the next start retries. A lock dir (~/.omp/omp-config-update.lock) keeps
 // concurrent OMP starts and /update-omp from refreshing or applying at once;
-// the loser skips.
+// the loser skips. The lock records its holder's pid: a dead holder's lock is
+// taken over, and a process only releases a lock it holds.
 //
 // PLUGINS. Entries of install-plugins.sh missing from
 // ~/.omp/plugins/package.json are installed with `omp install`. Nothing is
@@ -50,6 +54,7 @@ import {
 	existsSync,
 	lstatSync,
 	mkdirSync,
+	readlinkSync,
 	readFileSync,
 	readdirSync,
 	realpathSync,
@@ -205,14 +210,23 @@ function isAppManaged(path: string): boolean {
 	return text.split("\n", 1)[0]?.trim() === "// @orca-managed-pi-extension" || text.includes(OTTY_MARKER);
 }
 
-/** Resolve a symlinked target to the file it points at, so the link survives. */
+/**
+ * Resolve a symlinked target to the file it points at, so the link survives.
+ * A dangling link resolves through readlink, so writing recreates its target.
+ */
 function writePath(target: string): string {
+	let link = false;
 	try {
-		if (lstatSync(target).isSymbolicLink()) return realpathSync(target);
+		link = lstatSync(target).isSymbolicLink();
 	} catch {
 		// Missing target: write it in place.
 	}
-	return target;
+	if (!link) return target;
+	try {
+		return realpathSync(target);
+	} catch {
+		return resolve(dirname(target), readlinkSync(target));
+	}
 }
 
 function atomicWrite(target: string, content: string | Uint8Array, mode?: number): void {
@@ -239,11 +253,19 @@ function pathIsLocal(path: readonly string[], localFields: readonly string[]): b
 
 /** Repo values win key by key; host-only keys and local fields stay as they are. */
 function overlay(host: unknown, repo: Mapping, localFields: readonly string[], path: readonly string[]): Mapping {
-	const result: Mapping = isMapping(host) ? { ...host } : {};
+	// Deep copy: removeDropped later mutates nested maps, which must not alias the host's.
+	const result: Mapping = isMapping(host) ? structuredClone(host) : {};
 	for (const [key, value] of Object.entries(repo)) {
 		const keyPath = [...path, key];
 		if (pathIsLocal(keyPath, localFields)) continue;
-		result[key] = isMapping(value) ? overlay(result[key], value, localFields, keyPath) : structuredClone(value);
+		if (isMapping(value)) {
+			result[key] = overlay(result[key], value, localFields, keyPath);
+			continue;
+		}
+		// A non-map would wipe a local field nested under this key; the host's map stays.
+		const prefix = `${keyPath.join(".")}.`;
+		if (isMapping(result[key]) && localFields.some(field => field.startsWith(prefix))) continue;
+		result[key] = structuredClone(value);
 	}
 	return result;
 }
@@ -253,12 +275,19 @@ function removeDropped(host: Mapping, oldRepo: Mapping, newRepo: Mapping, localF
 	for (const [key, oldValue] of Object.entries(oldRepo)) {
 		const keyPath = [...path, key];
 		if (pathIsLocal(keyPath, localFields)) continue;
+		const current = host[key];
 		if (!(key in newRepo)) {
-			delete host[key];
+			// A dropped map loses only the keys the repo had; host-only and local keys under it stay.
+			if (isMapping(oldValue) && isMapping(current)) {
+				removeDropped(current, oldValue, {}, localFields, keyPath);
+				if (Object.keys(current).length === 0) delete host[key];
+			} else if (!isMapping(current)) {
+				// The repo had a value here; a map in its place is the host's own and stays.
+				delete host[key];
+			}
 			continue;
 		}
 		const next = newRepo[key];
-		const current = host[key];
 		if (isMapping(oldValue) && isMapping(next) && isMapping(current)) removeDropped(current, oldValue, next, localFields, keyPath);
 	}
 }
@@ -335,10 +364,16 @@ function planStructured(opts: ApplyOptions, report: ApplyReport): Op[] {
 		const target = targetOf(item.rel, opts.agentDir);
 		let host: Mapping | undefined;
 		if (existsSync(target)) {
+			if (isAppManaged(target)) {
+				report.skipped.push({ path: target, reason: "app-managed" });
+				continue;
+			}
 			try {
 				host = parseStructured(readFileSync(target, "utf8"), item.format);
 			} catch (error) {
-				report.notes.push(`${target}: host copy unparsable (${errorText(error)}), replaced`);
+				// Replacing it would drop the host's local fields; leave it and retry next start.
+				report.errors.push(`${target}: host copy unparsable (${errorText(error)}); left untouched`);
+				continue;
 			}
 		}
 		const merged = overlay(host, repo, item.localFields, []);
@@ -360,16 +395,21 @@ function planStructured(opts: ApplyOptions, report: ApplyReport): Op[] {
 
 function planDeletions(opts: ApplyOptions, report: ApplyReport): Op[] {
 	if (opts.previousCommit === undefined) return [];
-	const diff = git(opts.source, ["diff", "--no-renames", "--name-only", "--diff-filter=D", opts.previousCommit, "HEAD", "--", "agent"]);
+	// -z: NUL-separated, unquoted paths (non-ASCII names are C-quoted otherwise).
+	const diff = git(opts.source, ["diff", "-z", "--no-renames", "--name-only", "--diff-filter=D", opts.previousCommit, "HEAD", "--", "agent"]);
 	if (!diff.ok) {
 		report.notes.push(`deletions skipped: ${diff.err}`);
 		return [];
 	}
 	const ops: Op[] = [];
-	for (const rel of diff.out.split("\n").map(line => line.trim()).filter(Boolean)) {
+	for (const rel of diff.out.split("\0").filter(Boolean)) {
 		if (!managedPlain(rel)) continue;
 		const target = targetOf(rel, opts.agentDir);
-		if (!existsSync(target)) continue;
+		try {
+			lstatSync(target);
+		} catch {
+			continue;
+		}
 		if (isAppManaged(target)) {
 			report.skipped.push({ path: target, reason: "app-managed" });
 			continue;
@@ -386,7 +426,7 @@ function installLauncher(opts: ApplyOptions, report: ApplyReport): void {
 	if (!existsSync(sourcePath)) return;
 	const found = Bun.which("omp");
 	if (!found) {
-		report.notes.push("omp-light not installed: omp is not on PATH");
+		report.errors.push("omp-light not installed: omp is not on PATH");
 		return;
 	}
 	const binDir = dirname(resolve(found));
@@ -481,7 +521,7 @@ function syncPlugins(opts: ApplyOptions, report: ApplyReport): void {
 	const omp = Bun.which("omp");
 	if (!omp) {
 		report.pluginsMissing.push(...missing);
-		report.notes.push("plugins not installed: omp is not on PATH");
+		report.errors.push("plugins not installed: omp is not on PATH");
 		return;
 	}
 	for (const spec of missing) {
@@ -518,7 +558,8 @@ export async function applySnapshot(opts: ApplyOptions): Promise<ApplyReport> {
 				atomicWrite(op.target, op.content);
 				report.written.push(op.target);
 			} else {
-				unlinkSync(writePath(op.target));
+				// Remove the managed entry itself; a symlink's backing file is not ours.
+				unlinkSync(op.target);
 				report.deleted.push(op.target);
 			}
 		} catch (error) {
@@ -533,16 +574,35 @@ export async function applySnapshot(opts: ApplyOptions): Promise<ApplyReport> {
 // --- lock -------------------------------------------------------------------
 
 const LOCK_DIR = join(homedir(), ".omp", "omp-config-update.lock");
-const LOCK_STALE_MS = 15 * 60 * 1000;
+const LOCK_OWNER = join(LOCK_DIR, "pid");
+/** A lock dir without a pid file is a holder that died between mkdir and write. */
+const LOCK_ORPHAN_MS = 60 * 1000;
+
+/** The lock belongs to a running process; a dead holder's lock is stale. */
+function lockHolderAlive(): boolean {
+	let pid: number;
+	try {
+		pid = Number(readFileSync(LOCK_OWNER, "utf8"));
+	} catch {
+		return Date.now() - statSync(LOCK_DIR).mtimeMs < LOCK_ORPHAN_MS;
+	}
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "EPERM";
+	}
+}
 
 function acquireLock(): boolean {
 	for (let attempt = 0; attempt < 2; attempt++) {
 		try {
 			mkdirSync(LOCK_DIR);
+			writeFileSync(LOCK_OWNER, String(process.pid));
 			return true;
 		} catch {
 			try {
-				if (Date.now() - statSync(LOCK_DIR).mtimeMs < LOCK_STALE_MS) return false;
+				if (lockHolderAlive()) return false;
 				rmSync(LOCK_DIR, { recursive: true, force: true });
 			} catch {
 				// Lock vanished between attempts; retry.
@@ -550,6 +610,16 @@ function acquireLock(): boolean {
 		}
 	}
 	return false;
+}
+
+/** Release only a lock this process holds, never one taken over after it. */
+function releaseLock(): void {
+	try {
+		if (Number(readFileSync(LOCK_OWNER, "utf8")) !== process.pid) return;
+	} catch {
+		return;
+	}
+	rmSync(LOCK_DIR, { recursive: true, force: true });
 }
 
 // --- auto -------------------------------------------------------------------
@@ -602,7 +672,7 @@ export async function runAuto(agentDir: string, branch: string): Promise<AutoRes
 	} catch (error) {
 		return { kind: "failed", error: errorText(error) };
 	} finally {
-		rmSync(LOCK_DIR, { recursive: true, force: true });
+		releaseLock();
 	}
 }
 
@@ -658,7 +728,8 @@ async function main(argv: readonly string[]): Promise<number> {
 	}
 	if (mode === "apply") {
 		if (source === undefined) usage();
-		if (!acquireLock()) {
+		// --check only reads, so it neither takes nor waits for the lock.
+		if (!check && !acquireLock()) {
 			process.stderr.write(`another update holds ${LOCK_DIR}; retry later\n`);
 			return 1;
 		}
@@ -667,7 +738,7 @@ async function main(argv: readonly string[]): Promise<number> {
 			process.stdout.write(json ? `${JSON.stringify(report)}\n` : `${formatReport(report, check)}\n`);
 			return report.errors.length > 0 ? 1 : 0;
 		} finally {
-			rmSync(LOCK_DIR, { recursive: true, force: true });
+			releaseLock();
 		}
 	}
 	usage();

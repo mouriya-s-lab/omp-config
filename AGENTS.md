@@ -109,12 +109,16 @@ flowchart LR
   beside the resolved `omp` executable. Its managed set (`managedPlain`,
   `STRUCTURED`) must match the sync range in `.omp/commands/sync-omp-config.md`.
 - **The repo wins on managed items; everything else is the host's.** The updater
-  overwrites managed files and managed keys, host edits included, but only when
-  the fetched commit changes. It never touches host-only files, host-only keys,
+  overwrites managed files and managed keys, host edits included (in `auto`
+  mode only when the fetched commit differs from the applied one; `/update-omp`
+  applies the working tree whenever run). It never touches host-only files,
+  host-only keys (unless the repo turns their parent map into a non-map),
   `config.yml`'s machine-local fields (`LOCAL_CONFIG_FIELDS` in the updater,
-  also used by `/sync-omp-config`), app-managed files, or runtime state. It
-  deletes only what git shows the repo dropped between the applied commit and
-  the new one (files and structured keys); `/update-omp` deletes nothing.
+  also used by `/sync-omp-config`; their ancestors are never replaced by a
+  non-map), app-managed files, unparsable host structured files, or runtime
+  state. It deletes only what git shows the repo dropped between the applied
+  commit and the new one (managed files and structured keys; a whole dropped
+  structured file leaves the live file alone); `/update-omp` deletes nothing.
 - **Structured configs are compared field by field.** `config.yml`,
   `settings.json`, the agent-root `thinking-translator.json` and
   `system-prompt-replace.json`, `extensions/lang-nag.json`,

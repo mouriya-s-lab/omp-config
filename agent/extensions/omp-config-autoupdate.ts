@@ -114,18 +114,20 @@ export default function ompConfigAutoupdate(pi: ExtensionAPI): void {
 					return;
 				case "applied": {
 					const { report } = result;
+					// Offline: the applied commit came from the clone's cache, not a fresh fetch.
+					const cached = result.fetchError ? ` (from cached clone; fetch failed: ${result.fetchError})` : "";
 					const changed = report.written.length + report.deleted.length + report.pluginsInstalled.length;
 					if (report.errors.length > 0) {
-						notify(ctx, `omp-config: applied ${result.commit.slice(0, 7)} with ${report.errors.length} error(s), will retry next start: ${report.errors[0]}`, "warning");
+						notify(ctx, `omp-config: applied ${result.commit.slice(0, 7)}${cached} with ${report.errors.length} error(s), will retry next start: ${report.errors[0]}`, "warning");
 						return;
 					}
 					if (changed === 0) {
-						pi.logger.info(`omp-config: ${result.commit.slice(0, 7)} applied, host already matched`);
+						pi.logger.info(`omp-config: ${result.commit.slice(0, 7)} applied${cached}, host already matched`);
 						return;
 					}
 					notify(
 						ctx,
-						`omp-config: updated to ${result.commit.slice(0, 7)} (${report.written.length} written, ${report.deleted.length} deleted, ${report.pluginsInstalled.length} plugin(s) installed)${report.restartNeeded ? "; restart OMP to load extensions/APPEND_SYSTEM/plugins" : ""}`,
+						`omp-config: updated to ${result.commit.slice(0, 7)}${cached} (${report.written.length} written, ${report.deleted.length} deleted, ${report.pluginsInstalled.length} plugin(s) installed)${report.restartNeeded ? "; restart OMP to load extensions/APPEND_SYSTEM/plugins" : ""}`,
 						"info",
 					);
 					return;
