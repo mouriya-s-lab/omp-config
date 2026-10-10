@@ -156,7 +156,7 @@ export type AutoResult =
 	| { readonly kind: "busy" }
 	| { readonly kind: "offline"; readonly error: string }
 	| { readonly kind: "up-to-date"; readonly commit: string }
-	| { readonly kind: "applied"; readonly commit: string; readonly report: ApplyReport }
+	| { readonly kind: "applied"; readonly commit: string; readonly previous: string | undefined; readonly report: ApplyReport }
 	| { readonly kind: "failed"; readonly error: string };
 
 // --- small helpers ----------------------------------------------------------
@@ -679,7 +679,7 @@ export async function runAuto(agentDir: string, branch: string): Promise<AutoRes
 		const report = await fetched.applySnapshot({ source: CLONE_DIR, agentDir, previousCommit, check: false, plugins: true });
 		if (applied && previousCommit === undefined) report.notes.push(`previous commit ${applied} unavailable, no deletions`);
 		if (report.errors.length === 0) atomicWrite(markerPath, `${commit}\n`);
-		return { kind: "applied", commit, report };
+		return { kind: "applied", commit, previous: applied || undefined, report };
 	} catch (error) {
 		return { kind: "failed", error: errorText(error) };
 	} finally {
