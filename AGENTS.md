@@ -285,7 +285,7 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
   no-token-saving rule, design-document read-in-full rule, spawn briefing, agent chat and lifecycle,
   agent tiers, shared-checkout vs `isolated: true` rules, tool policy). Task children
   never receive it, so rules they need are repeated in the `task:*` definitions. Rules about
-  how to use one tool (`todo` timing and revision, explicit `agent`, per-spawn `model`/`effort`,
+  how to use one tool (`todo` timing and revision, explicit `agent`, per-spawn `effort`,
   `task` vs `fork_task`) live in that tool's description instead — built-in ones rewritten by
   `system-prompt-replace.json`, `fork_task`'s in `fork-task.ts` — so subagents see them too;
   this relies on `config.yml` `inlineToolDescriptors: "on"`, which renders every tool
