@@ -1,13 +1,20 @@
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { getAgentDir } from "@oh-my-pi/pi-coding-agent";
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 // ============================================================================
-// omp-config-autoupdate — apply the omp-config repo at every OMP start.
+// omp-config-autoupdate — apply the omp-config repo at OMP start, when enabled.
 //
-// WHAT. Once per process, in the root session's `session_start`, runs
+// SWITCH. Off by default. `/omp-config-autoupdate on|off` writes
+// `<agent dir>/omp-config-autoupdate.json` (`{"enabled": true|false}`);
+// `/omp-config-autoupdate` or `… status` shows it. A missing or invalid file
+// means off. The file is machine-local: the updater does not manage it and
+// /sync-omp-config does not carry it. Read at each start, so a change applies
+// from the next start.
+//
+// WHAT. When on, once per process, in the root session's `session_start`, runs
 // `bun <agent dir>/omp-config-update.ts auto --agent-dir <agent dir> --json`
 // as a child process. That script fetches origin into its own clone and, when
 // the fetched commit differs from the one last applied to this agent dir,
@@ -31,6 +38,27 @@ import { join } from "node:path";
 // ============================================================================
 
 const SCRIPT = "omp-config-update.ts";
+const SWITCH_FILE = "omp-config-autoupdate.json";
+
+type Switch = { readonly kind: "on" } | { readonly kind: "off" } | { readonly kind: "invalid"; readonly reason: string };
+
+function readSwitch(path: string): Switch {
+	let text: string;
+	try {
+		text = readFileSync(path, "utf8");
+	} catch {
+		return { kind: "off" };
+	}
+	try {
+		const value: unknown = JSON.parse(text);
+		if (typeof value === "object" && value !== null && "enabled" in value && typeof value.enabled === "boolean") {
+			return value.enabled ? { kind: "on" } : { kind: "off" };
+		}
+		return { kind: "invalid", reason: 'expected {"enabled": true|false}' };
+	} catch (error) {
+		return { kind: "invalid", reason: error instanceof Error ? error.message : String(error) };
+	}
+}
 
 type ApplyReport = {
 	readonly written: readonly string[];
@@ -81,9 +109,51 @@ export default function ompConfigAutoupdate(pi: ExtensionAPI): void {
 		else pi.logger.info(text);
 	};
 
+	pi.registerCommand("omp-config-autoupdate", {
+		description: "Turn startup auto-update of omp-config on or off: /omp-config-autoupdate [status|on|off]",
+		getArgumentCompletions: prefix => {
+			const matches = ["status", "on", "off"].filter(value => value.startsWith(prefix.trim().toLowerCase())).map(value => ({ value, label: value }));
+			return matches.length ? matches : null;
+		},
+		handler: async (args, ctx) => {
+			const action = args.trim().toLowerCase() || "status";
+			const path = join(getAgentDir(), SWITCH_FILE);
+			if (action === "on" || action === "off") {
+				try {
+					writeFileSync(path, `${JSON.stringify({ enabled: action === "on" })}\n`);
+				} catch (error) {
+					ctx.ui.notify(`omp-config: cannot write ${path}: ${error instanceof Error ? error.message : String(error)}`, "error");
+					return;
+				}
+				ctx.ui.notify(`omp-config: auto-update ${action}; takes effect from the next OMP start (${path})`, "info");
+				return;
+			}
+			if (action !== "status") {
+				ctx.ui.notify("Usage: /omp-config-autoupdate [status|on|off]", "warning");
+				return;
+			}
+			const state = readSwitch(path);
+			switch (state.kind) {
+				case "on":
+					ctx.ui.notify(`omp-config: auto-update is on (${path})`, "info");
+					return;
+				case "off":
+					ctx.ui.notify(`omp-config: auto-update is off (${path}); enable with /omp-config-autoupdate on`, "info");
+					return;
+				case "invalid":
+					ctx.ui.notify(`omp-config: ${path} is invalid (${state.reason}); auto-update is off`, "warning");
+					return;
+			}
+		},
+	});
+
 	pi.on("session_start", (_event, ctx) => {
 		if (started || ctx.agent?.parentId) return;
 		started = true;
+		const switchPath = join(getAgentDir(), SWITCH_FILE);
+		const state = readSwitch(switchPath);
+		if (state.kind === "invalid") notify(ctx, `omp-config: ${switchPath} is invalid (${state.reason}); auto-update is off`, "warning");
+		if (state.kind !== "on") return;
 		ctx.setTimeout(async () => {
 			const agentDir = getAgentDir();
 			const script = join(agentDir, SCRIPT);

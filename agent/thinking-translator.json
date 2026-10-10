@@ -3,7 +3,8 @@
   "targetLanguage": "Simplified Chinese",
   "translatorModel": {
     "provider": "bansos",
-    "id": "nemotron-3-ultra-free"
+    "id": "muse-spark-1.3-contributor-free",
+    "effort": "minimal"
   },
   "trace": false
 }

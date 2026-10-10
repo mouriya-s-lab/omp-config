@@ -38,11 +38,12 @@ Oh My Pi（OMP）配置中可以审查、可以迁移的部分，为重型编程
 **新机器：**
 
 1. 执行 [`/update-omp`](#update-omp仓库--本机)：把配置写进本机（包括更新器 `omp-config-update.ts` 和 [omp-config-autoupdate](#omp-config-autoupdate) 扩展），安装 `omp-light`，补装缺少的插件。
-2. 重启 OMP。追加提示词、扩展和插件都在启动时加载。之后每次启动都会从 GitHub 默认分支[自动更新](#启动时自动更新)，不用再手动执行 `/update-omp`。
-3. 按[迁移后检查](#迁移后检查)确认结果。
-4. 需要沿用旧机器的供应商登录时，在旧机器上执行 [`/migrate-omp-keys <新机器>`](#凭据迁移migrate-omp-keys-target)。
+2. 重启 OMP。追加提示词、扩展和插件都在启动时加载。
+3. 需要每次启动都从 GitHub 默认分支[自动更新](#启动时自动更新)时，执行 `/omp-config-autoupdate on`（默认关闭），从下次启动起生效；之后就不用再手动执行 `/update-omp`。
+4. 按[迁移后检查](#迁移后检查)确认结果。
+5. 需要沿用旧机器的供应商登录时，在旧机器上执行 [`/migrate-omp-keys <新机器>`](#凭据迁移migrate-omp-keys-target)。
 
-**本机改了配置，要收回仓库：** 先执行 `/sync-omp-config check` 查看差异，再执行 [`/sync-omp-config`](#sync-omp-config本机--仓库) 写入仓库，并提交、推送。默认分支有新提交时，下次启动的自动更新会用仓库版本覆盖本机的托管项，没收回仓库的改动会丢失。
+**本机改了配置，要收回仓库：** 先执行 `/sync-omp-config check` 查看差异，再执行 [`/sync-omp-config`](#sync-omp-config本机--仓库) 写入仓库，并提交、推送。自动更新开着时，默认分支一有新提交，下次启动就会用仓库版本覆盖本机的托管项，没收回仓库的改动会丢失。
 
 ## 设计思路
 
@@ -101,7 +102,7 @@ Oh My Pi（OMP）配置中可以审查、可以迁移的部分，为重型编程
 
 ```mermaid
 flowchart LR
-  gh["GitHub 默认分支"] -->|"OMP 启动时自动更新"| local["本机 ~/.omp/agent 与 ~/.pi/agent"]
+  gh -->|"OMP 启动时自动更新（需打开开关）"| local["本机 ~/.omp/agent 与 ~/.pi/agent"]
   repo["omp-config 工作区"] -->|"/update-omp"| local
   local -->|"/sync-omp-config"| repo
   repo -->|"推送、合并"| gh
@@ -110,7 +111,7 @@ flowchart LR
   local -->|"/migrate-omp-keys"| remote["远端 agent.db 的凭据表"]
 ```
 
-仓库 → 本机平时由[启动时自动更新](#启动时自动更新)完成，不用执行命令。三个命令在仓库根目录启动 OMP 后执行，完整规则见 `.omp/commands/` 下的同名文件。
+仓库 → 本机有两条路：打开[启动时自动更新](#启动时自动更新)后由它在启动时完成，不打开就手动执行 `/update-omp`。三个命令在仓库根目录启动 OMP 后执行，完整规则见 `.omp/commands/` 下的同名文件。
 
 |命令|方向|写入|加 `check`|
 |---|---|---|---|
@@ -127,7 +128,7 @@ flowchart LR
 
 ### 启动时自动更新
 
-[omp-config-autoupdate](#omp-config-autoupdate) 扩展在每次 OMP 启动时运行更新器 `omp-config-update.ts auto`。仓库对托管项说了算：本机绕过仓库直接改了托管文件或托管字段，下次更新时会被覆盖。除此之外，本机自己的东西一律不动。
+[omp-config-autoupdate](#omp-config-autoupdate) 扩展在 OMP 启动时运行更新器 `omp-config-update.ts auto`。默认关闭，用 `/omp-config-autoupdate on` 打开、`off` 关闭，开关只属于本机，见该扩展一节。仓库对托管项说了算：本机绕过仓库直接改了托管文件或托管字段，下次更新时会被覆盖。除此之外，本机自己的东西一律不动。
 
 1. **取仓库**：更新器在 `~/.omp/omp-config-src` 维护一份自己的浅克隆，从 `https://github.com/mouriya-s-lab/omp-config.git` 拉 `master` 分支（仓库的默认分支，写死在更新器的 `DEFAULT_BRANCH` 里）。这个目录存在但不是这个仓库的克隆时不碰它，直接报错；断网时用克隆里已有的提交，通知会注明这一点。
 2. **只在提交变化时应用**：新提交和 `<agent 目录>/.omp-config-applied` 记录的上次应用提交相同就什么都不做，所以没有新提交时，`/settings`、`/bansos` 改过的托管值不会被每次启动改回去。应用规则取自新提交里的 `omp-config-update.ts`，改了更新规则的提交按自己的规则应用。
@@ -152,10 +153,10 @@ flowchart LR
 
 ### `/update-omp`：仓库 → 本机
 
-用工作区（含未推送的改动）手动更新一次：`bun agent/omp-config-update.ts apply --source .`，写入规则与自动更新相同。新机器首次安装更新器时，以及想先在本机试用未推送的改动时用它。和自动更新的差别：
+用工作区（含未推送的改动）手动更新一次：`bun agent/omp-config-update.ts apply --source .`，写入规则与自动更新相同。没打开自动更新时，仓库 → 本机就靠它；打开了的话，新机器首次安装更新器、想先在本机试用未推送的改动时用它。和自动更新的差别：
 
 - 不删文件，也不删结构化配置里的键：工作区没有“上次应用的提交”可以对比。
-- 不改写 `.omp-config-applied`。下次启动时，只要默认分支的提交与记录不同，自动更新就会覆盖手动应用的内容；改动推送并合并后再启动，两边就一致了。
+- 不改写 `.omp-config-applied`。自动更新开着时，下次启动只要默认分支的提交与记录不同，就会覆盖手动应用的内容；改动推送并合并后再启动，两边就一致了。
 - 用 `./plugin-audit.sh` 找出 `[卸载候选]`，询问后卸载；缺失的插件由更新器补装。
 - 本机初始化项已存在就不动，缺失时先问用户是否创建、内容填什么，没确认就跳过并在报告里说明：`extensions/doc-polish.json`、[unified-exec-bun-pty](#unified-exec-bun-pty) 需要的 PTY 原生包缓存、[commandcode-model-spec](#commandcode-model-spec) 依赖的 `commandcode-models.json`。自动更新从不创建它们。
 
@@ -166,7 +167,7 @@ flowchart LR
 只读本机，不写 `~/.omp`、`~/.pi`、`omp` 安装目录、PATH 或 shell 配置，本机文件的 mtime 前后不变。
 
 - **范围**：`config.yml`、`settings.json`、`APPEND_SYSTEM.md`、`APPEND_SYSTEM_MODEL.md`、`thinking-translator.json`、`system-prompt-replace.json`、`PROMPT-INJECT-*.md`、轻量模式三项资产、`omp-config-update.ts`、`agents/`、`extensions/*.ts`、`extensions-last/*.ts`、`extensions/lang-nag.json`、`extensions/input-polish.json`，以及 `~/.pi/agent/pi-bansos-relay-state.json`。与更新器的托管范围一致。
-- **不收回**：安装到 `omp` 旁边的 `omp-light` / `omp-light.cmd`（轻量模式三项只从 `~/.omp/agent` 取）；`extensions/doc-polish.json`；`.omp-config-applied`。
+- **不收回**：安装到 `omp` 旁边的 `omp-light` / `omp-light.cmd`（轻量模式三项只从 `~/.omp/agent` 取）；`extensions/doc-polish.json`；`.omp-config-applied`；自动更新的开关 `omp-config-autoupdate.json`。
 - 本机没有 `pi-bansos-relay-state.json`（从没用 `/bansos` 改过设置）时，不算“本机已删除”，仓库保持原样。
 - `~/.omp/plugins/package.json` 的依赖和 `install-plugins.sh` 不一致时，重写脚本里的插件列表：URL/Git 依赖原样保留，npm 依赖去掉版本号；注释掉的可选插件保持注释，见[插件](#插件)。
 - 写入仓库后校验：普通文件与本机 `cmp` 一致，结构化配置除本机字段外逐字段一致，YAML/JSON 能解析，仓库里没有明文凭据（`sk-`、`ghp_`、超长的 `apiKey:` 值），`git status --short` 里没有运行时文件或已安装入口。
@@ -190,7 +191,7 @@ flowchart LR
 
 |分类|含义|处理|
 |---|---|---|
-|`[安装]`|脚本要求、本机缺失|更新器补装（自动更新和 `/update-omp` 都会）。更新器按 `~/.omp/plugins/package.json` 判断缺失：GitHub 条目比 URL，npm 条目比包名|
+|`[安装]`|脚本要求、本机缺失|更新器补装（自动更新和 `/update-omp` 都会）。更新器按 `~/.omp/plugins/package.json` 判断缺失：GitHub 条目比去掉 `#ref` 的 URL（本机钉在某个分支或提交上也算已装，不会被改回默认分支），npm 条目比包名|
 |`[卸载候选]`|从脚本删掉了，本机还装着|只有 `/update-omp` 处理：询问后 `omp plugin uninstall <name>`；自动更新从不卸载|
 |`[保留]`|用户自己装的，脚本从没登记过|不动|
 |`[已同步]`|脚本与本机一致|—|
@@ -199,7 +200,7 @@ GitHub URL 的插件名按 URL 最后一段推断，仓库名和包名不同时�
 
 ### 手动迁移
 
-不走 `/update-omp` 时，只复制下面的文件集，不要复制整个 `agent/`：里面还有运行时状态、`models.yml` 和 `commandcode-models.json`。这是整文件复制，会用仓库版本覆盖目标机的 `config.yml`（包括本机字段，如 `compaction.thresholdTokens`）和 `extensions/doc-polish.json`，也会带上只给仓库看的 `extensions-last/README.md`；目标机已有配置时改用 `/update-omp`，或复制后恢复这些本机内容。复制完成后，自动更新从下次启动开始接管。先备份目标机，检查差异，然后：
+不走 `/update-omp` 时，只复制下面的文件集，不要复制整个 `agent/`：里面还有运行时状态、`models.yml` 和 `commandcode-models.json`。这是整文件复制，会用仓库版本覆盖目标机的 `config.yml`（包括本机字段，如 `compaction.thresholdTokens`）和 `extensions/doc-polish.json`，也会带上只给仓库看的 `extensions-last/README.md`；目标机已有配置时改用 `/update-omp`，或复制后恢复这些本机内容。先备份目标机，检查差异，然后：
 
 ```bash
 mkdir -p "$HOME/.omp/agent"
@@ -214,7 +215,7 @@ cp pi/agent/pi-bansos-relay-state.json "$HOME/.pi/agent/"
 ./install-plugins.sh
 ```
 
-复制完重启 OMP。第一次启动时还没有 `.omp-config-applied`，自动更新会按默认分支完整应用一次：这一步会把 `omp-light` 装到 PATH 上 `omp` 所在的目录（`omp` 必须已在 PATH 上），并补装缺失的插件；只复制文件不会让 `omp-light` 可用。首次应用改动的扩展和补装的插件要再重启一次才加载，通知会提醒。
+复制完重启 OMP。只复制文件不会让 `omp-light` 可用：在目标机执行一次 `/update-omp`，它会把 `omp-light` 装到 PATH 上 `omp` 所在的目录（`omp` 必须已在 PATH 上）。也可以执行 `/omp-config-autoupdate on` 后再重启：第一次自动更新时还没有 `.omp-config-applied`，会按默认分支完整应用一次，同样安装 `omp-light` 并补装缺失的插件。首次应用改动的扩展和补装的插件要再重启一次才加载，通知会提醒。
 
 `pi-bansos-relay-state.json` 放在 `~/.pi/agent/` 而不是 `~/.omp/agent/`，因为插件从那里读。它记录 relay 开关、当前 relay、已保存的 relay 列表和状态栏设置，由 `/bansos` 写入，不含凭据。状态栏默认显示 `relay: ON/OFF`；隐藏设置（`statusBar: "hidden"`）只存在这个文件里，缺了它，新机器会重新显示。
 
@@ -243,7 +244,7 @@ git status --short
 
 - 用 `APPEND_SYSTEM_LIGHT.md` 代替完整的追加提示词。
 - 按 `config-light.yml` 禁用 12 个行为扩展：`ctx-post-compact-hint`、`ctx-tasklog`、`ctx-tool`、`doc-polish`、`fork-task`、`isolation-nudge`、`lang-nag`、`task-completion-judge`、`task-split-check`、`tool-policy-nag`、`user-prompt-inject`、`watchdog-agent`。
-- 其余 8 个扩展照常加载：`append-system-model`、`bro`、`input-polish`、`repo-rules`、`subagent-todo`、[omp-config-autoupdate](#omp-config-autoupdate)，以及两个兼容性修复（`commandcode-model-spec`、`unified-exec-bun-pty`）。`APPEND_SYSTEM_MODEL.md` 因此在轻量模式下照样注入，用 `omp-light` 启动也会自动更新。
+- 其余 8 个扩展照常加载：`append-system-model`、`bro`、`input-polish`、`repo-rules`、`subagent-todo`、[omp-config-autoupdate](#omp-config-autoupdate)，以及两个兼容性修复（`commandcode-model-spec`、`unified-exec-bun-pty`）。`APPEND_SYSTEM_MODEL.md` 因此在轻量模式下照样注入；自动更新开着时，用 `omp-light` 启动也会更新。
 - `config-light.yml` 把 `extensions` 覆盖成只有 `~/.claude`，去掉 `config.yml` 末项的 [system-prompt-replace](#system-prompt-replace)。`disabledExtensions` 只过滤按模块名发现的扩展，管不到 `config.yml` 里按路径加载的项，所以只能这样排除。`config.yml` 的 `extensions` 以后增删 `~/.claude` 之外的项时，要同步判断 `config-light.yml` 是否跟着改。
 - 插件、rules、skills、上下文文件，以及 model、thinking、profile、auth、session 设置都不变。被禁用扩展注册的工具（`ctx`、`polish_doc`、`fork_task`）在轻量模式下不存在。
 - `omp-light` 从 agent 目录读 `config-light.yml` 和 `APPEND_SYSTEM_LIGHT.md`：设置了 `PI_CODING_AGENT_DIR` 时用它，否则用 `~/.omp/agent`。缺任何一个就直接退出，不回退到别的目录。
@@ -346,7 +347,7 @@ harness 会把 `APPEND_SYSTEM.md` 和每个 agent 的 `description` 都注入主
 |[input-polish](#input-polish)|`Ctrl+Enter` 润色输入框草稿，overlay 预览后回车发送、Esc 取消|是|
 |[commandcode-model-spec](#commandcode-model-spec)|修复 `--model` 指定 commandcode 模型时的认证失败|是|
 |[unified-exec-bun-pty](#unified-exec-bun-pty)|让 `exec_command` 在 darwin-arm64 上支持 `tty: true`|是|
-|[omp-config-autoupdate](#omp-config-autoupdate)|启动时从 GitHub 默认分支自动更新本机配置|是|
+|[omp-config-autoupdate](#omp-config-autoupdate)|启动时从 GitHub 默认分支自动更新本机配置；默认关闭，`/omp-config-autoupdate on\|off` 开关|是|
 
 ### 行为约束
 
@@ -779,9 +780,18 @@ overlay 里上下键或滚轮滚动，`C` 复制到系统剪贴板，`R` 重新�
 
 #### omp-config-autoupdate
 
-`omp-config-autoupdate.ts` 在 OMP 启动时触发[启动时自动更新](#启动时自动更新)。更新规则在更新器 `omp-config-update.ts` 里，这个扩展只负责启动它、汇报结果。
+`omp-config-autoupdate.ts` 在 OMP 启动时触发[启动时自动更新](#启动时自动更新)。更新规则在更新器 `omp-config-update.ts` 里，这个扩展只负责开关、启动更新器、汇报结果。
 
-- **时机**：每个进程只运行一次，在根会话的 `session_start` 里；subagent 和同进程的其他会话不重复运行。
+- **开关**：默认关闭。
+
+  |命令|作用|
+  |---|---|
+  |`/omp-config-autoupdate` 或 `… status`|显示当前状态和开关文件路径|
+  |`/omp-config-autoupdate on`|打开，下次启动起生效|
+  |`/omp-config-autoupdate off`|关闭，下次启动起生效|
+
+  开关存在 agent 目录下的 `omp-config-autoupdate.json`（`{"enabled": true}`）。文件不存在、内容无效都算关闭；内容无效时启动和 `status` 都会弹 warning。这个文件属于本机：更新器不管理它，`/sync-omp-config` 也不收回，每台机器各自决定开不开。每次启动读一次，所以改了开关从下次启动生效。
+- **时机**：开关打开时，每个进程只运行一次，在根会话的 `session_start` 里；subagent 和同进程的其他会话不重复运行。关闭时什么都不做，也不提示。
 - **做法**：用 `ctx.setTimeout` 起一个子进程 `bun <agent 目录>/omp-config-update.ts auto --agent-dir <agent 目录> --json`，不阻塞启动，读它最后一行 JSON 结果。agent 目录取 `getAgentDir()`，跟随 profile 和 `PI_CODING_AGENT_DIR`。更新放在子进程里，是因为扩展和 OMP 在同一个进程、没有隔离，更新器出任何问题都不能拖垮 OMP。会话先结束时子进程继续跑完：写入是原子的，锁也由它自己释放。
 - **通知**：见[启动时自动更新](#启动时自动更新)。
 - **失败**：找不到 `bun`、更新器文件不存在、子进程没给出结果、更新失败，都只弹 warning 并写日志，不影响会话。更新器文件不存在时，提示先执行一次 `/update-omp`。

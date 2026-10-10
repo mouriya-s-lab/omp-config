@@ -4,7 +4,8 @@
 // omp-config-update — apply the omp-config repo snapshot to an OMP agent dir.
 //
 // TWO ENTRY POINTS, ONE APPLY.
-//   auto   Run by extensions/omp-config-autoupdate.ts at every OMP start.
+//   auto   Run by extensions/omp-config-autoupdate.ts at OMP start when the
+//          machine's switch is on (`/omp-config-autoupdate on`; off by default).
 //          Refreshes the updater-owned clone (~/.omp/omp-config-src) from
 //          origin, and applies only when its commit differs from the commit
 //          last applied to this agent dir (`<agent dir>/.omp-config-applied`).
@@ -491,7 +492,8 @@ function installedPluginSpecs(): { names: Set<string>; values: Set<string> } {
 		const deps = isMapping(parsed) && isMapping(parsed.dependencies) ? parsed.dependencies : {};
 		for (const [name, value] of Object.entries(deps)) {
 			names.add(name);
-			if (typeof value === "string") values.add(value);
+			// Strip `#ref`: a host install pinned to a branch or commit still counts as installed.
+			if (typeof value === "string") values.add(value.split("#", 1)[0]!);
 		}
 	} catch {
 		// No plugins installed yet.
@@ -511,7 +513,7 @@ function npmName(spec: string): string {
 function syncPlugins(opts: ApplyOptions, report: ApplyReport): void {
 	const installed = installedPluginSpecs();
 	const missing = declaredPlugins(opts.source).filter(spec =>
-		spec.includes("://") ? !installed.values.has(spec) : !installed.names.has(npmName(spec)),
+		spec.includes("://") ? !installed.values.has(spec.split("#", 1)[0]!) : !installed.names.has(npmName(spec)),
 	);
 	if (missing.length === 0) return;
 	if (opts.check || !opts.plugins) {

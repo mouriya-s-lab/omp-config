@@ -19,11 +19,12 @@ state) and install its PATH launcher. Runtime
 state (databases, sessions, caches, credentials) is deliberately excluded.
 
 The repo is consumed by `omp` in two directions:
-- **repo → machine**: at every `omp` start, `extensions/omp-config-autoupdate.ts`
-  runs `omp-config-update.ts auto`, which fetches the GitHub default branch into
-  its own clone (`~/.omp/omp-config-src`) and applies it when the commit differs
-  from the one recorded in `<agent dir>/.omp-config-applied`. `/update-omp`
-  runs the same updater against the working checkout.
+- **repo → machine**: `/update-omp` runs `omp-config-update.ts apply` against the
+  working checkout. Opt-in per machine (`/omp-config-autoupdate on`, off by
+  default), `extensions/omp-config-autoupdate.ts` runs `omp-config-update.ts auto`
+  at every `omp` start, which fetches the GitHub default branch into its own
+  clone (`~/.omp/omp-config-src`) and applies it when the commit differs from
+  the one recorded in `<agent dir>/.omp-config-applied`.
 - **machine → repo**: `/sync-omp-config` captures eligible local state back here.
 
 ## Architecture & Data Flow
@@ -66,7 +67,7 @@ flowchart LR
   O["PATH directory beside resolved omp"]
   M["omp-light (POSIX) / omp-light.ts + .cmd (Windows)"]
   repo -->|"push + merge"| GH
-  GH -->|"omp start: omp-config-autoupdate → updater auto"| machine
+  GH -->|"omp start, if switched on: omp-config-autoupdate → updater auto"| machine
   GH -->|"updater auto"| LB
   repo -->|"/update-omp: updater apply --source ."| machine
   B -->|"/update-omp"| LB
@@ -141,7 +142,7 @@ flowchart LR
 | Path | Purpose |
 | --- | --- |
 | `agent/` | Managed harness config. Only listed items are portable; the whole dir is **not**. |
-| `agent/extensions/` | Local TypeScript extensions (the code core). 20 `.ts` (incl. `omp-config-autoupdate.ts`, which runs `omp-config-update.ts auto` as a child process once per process from the root session's `session_start` and reports the result, `bro.ts`, the built-in-AI rewrite of the former `pi-bro` plugin, `input-polish.ts`, which polishes the input-box draft on the configured chord (default Ctrl+Enter) and shows the result in an overlay over the input box, where Enter sends it and Esc discards it, `watchdog-agent.ts`, `user-prompt-inject.ts`, which renders the root session's user prompts into `PROMPT-INJECT-*.md` templates and prepends them, request-only, to every model call of the targeted subagents (mentor and discussants by default), `append-system-model.ts`, which appends the `APPEND_SYSTEM_MODEL.md` blocks whose `model`/`provider` regexes match the session's model to the system prompt on every `before_agent_start`, `fork-task.ts`, which seeds native `task` children with a copy of the caller's conversation, `task-split-check.ts`, which blocks main-agent `task` items for `task:low`/`task:mid`/`task:free` that cover more than one topic, and any `task`/`fork_task` call that caps a `task:*` worker's report length, `subagent-todo.ts`, which gives each `task:*` worker its own native `todo` tool that OMP strips from subagents, and `task-completion-judge.ts`, which bounces a `task:low`/`task:mid`/`task:free` worker's first final `yield` once when a model judges the slice unfinished, and once more when it is finished but the worker's todo list still has open items) + `doc-polish.json`/`input-polish.json`/`lang-nag.json` sidecars (`input-polish.json` and `lang-nag.json` are synced both ways; `doc-polish.json` is machine-local/prompt-overridable — see Important Files). |
+| `agent/extensions/` | Local TypeScript extensions (the code core). 20 `.ts` (incl. `omp-config-autoupdate.ts`, which, when switched on with `/omp-config-autoupdate on` (off by default), runs `omp-config-update.ts auto` as a child process once per process from the root session's `session_start` and reports the result, `bro.ts`, the built-in-AI rewrite of the former `pi-bro` plugin, `input-polish.ts`, which polishes the input-box draft on the configured chord (default Ctrl+Enter) and shows the result in an overlay over the input box, where Enter sends it and Esc discards it, `watchdog-agent.ts`, `user-prompt-inject.ts`, which renders the root session's user prompts into `PROMPT-INJECT-*.md` templates and prepends them, request-only, to every model call of the targeted subagents (mentor and discussants by default), `append-system-model.ts`, which appends the `APPEND_SYSTEM_MODEL.md` blocks whose `model`/`provider` regexes match the session's model to the system prompt on every `before_agent_start`, `fork-task.ts`, which seeds native `task` children with a copy of the caller's conversation, `task-split-check.ts`, which blocks main-agent `task` items for `task:low`/`task:mid`/`task:free` that cover more than one topic, and any `task`/`fork_task` call that caps a `task:*` worker's report length, `subagent-todo.ts`, which gives each `task:*` worker its own native `todo` tool that OMP strips from subagents, and `task-completion-judge.ts`, which bounces a `task:low`/`task:mid`/`task:free` worker's first final `yield` once when a model judges the slice unfinished, and once more when it is finished but the worker's todo list still has open items) + `doc-polish.json`/`input-polish.json`/`lang-nag.json` sidecars (`input-polish.json` and `lang-nag.json` are synced both ways; `doc-polish.json` is machine-local/prompt-overridable — see Important Files). |
 | `agent/extensions-last/` | Extensions that must run after every other path-loaded extension, loaded by path as the last `config.yml` `extensions` entry (`~/.omp/agent/extensions-last/system-prompt-replace.ts`); `README.md` there documents load order and is repo-only. Holds `system-prompt-replace.ts`, which applies the `system-prompt-replace.json` rules (`literal` or `regex` + `replace`) to the system prompt on every `before_agent_start`, main session and subagents; it rewrites built-in tool descriptions that conflict with `APPEND_SYSTEM.md`. Excluded in light mode by `config-light.yml`'s `extensions` override. `*.ts` there are synced both ways like `extensions/*.ts`. |
 | `agent/system-prompt-replace.json` | Agent-root replacement rules for `system-prompt-replace.ts`. Portable regular item in both directions (field-level diff and edit; validate with `JSON.parse`). Read per prompt, so edits apply without restart; a rule whose target is absent from the main session's system prompt raises a visible warning (UI notification, or stderr when headless) once per rule per process. |
 | `agent/agents/` | Custom subagent definitions (`*.md`) + `README.txt` authoring pitfalls. |
@@ -152,7 +153,7 @@ flowchart LR
 | `.omp/commands/` | Project-level slash-command definitions run from repo root. |
 | repo root | `install-plugins.sh`, `plugin-audit.sh`, `README.md` (authoritative, in Chinese). |
 | `agent/config-light.yml`, `agent/APPEND_SYSTEM_LIGHT.md`, `agent/omp-light.ts` | Light-mode assets are included in both sync directions; the updater copies them to `~/.omp/agent` and installs the PATH entry beside the resolved `omp`. Generated `omp-light` / `omp-light.cmd` entries are not repo files. |
-| `agent/omp-config-update.ts` | The repo → machine updater (Bun script, also a managed item copied to `~/.omp/agent`). `auto` mode runs at every start; `apply --source <dir> [--check]` backs `/update-omp`. Its header documents what it touches, deletes, and never touches. |
+| `agent/omp-config-update.ts` | The repo → machine updater (Bun script, also a managed item copied to `~/.omp/agent`). `auto` mode runs at every start when the machine's auto-update switch is on; `apply --source <dir> [--check]` backs `/update-omp`. Its header documents what it touches, deletes, and never touches. |
 
 ## Development Commands
 
@@ -162,6 +163,7 @@ Slash commands run inside `omp` started at the repo root:
 /update-omp [check]           # working checkout -> machine via `omp-config-update.ts apply --source .`; asks about plugin uninstall candidates and missing machine-local init files
 /sync-omp-config [check]      # machine -> repo (repo write only); syncs light assets, never installed PATH entries. Full mode commits+pushes
 /migrate-omp-keys <target>    # SSH-copy auth_credentials to a remote omp host (not a snapshot path)
+/omp-config-autoupdate [status|on|off]   # machine-local switch for startup auto-update (off by default; applies from next start)
 ```
 
 Shell scripts run from repo root:
@@ -292,7 +294,7 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
   optional behavior extensions (including `task-completion-judge` and
   `user-prompt-inject`); the other eight (`append-system-model`, `bro`, `input-polish`, `repo-rules`,
   `subagent-todo`, `omp-config-autoupdate`, and two compatibility fixes) stay loaded, as listed in `README.md`,
-  so `omp-light` starts auto-update too.
+  so `omp-light` also auto-updates when the switch is on.
   It overrides `extensions` to `[~/.claude]` to drop `system-prompt-replace.ts`:
   `disabledExtensions` only filters discovered `extension-module:<name>` entries,
   never `config.yml` path entries. Re-check this override whenever `config.yml`
@@ -304,16 +306,21 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
   `omp-light.ts` plus a generated `omp-light.cmd` on Windows, beside the resolved
   `omp`; generated entries are not part of the repo copy set.
 - `agent/omp-config-update.ts` + `agent/extensions/omp-config-autoupdate.ts` —
-  the updater and its startup hook. The hook spawns the installed updater with
+  the updater and its startup hook. The hook is off by default:
+  `/omp-config-autoupdate [status|on|off]` writes the machine-local switch
+  `<agent dir>/omp-config-autoupdate.json` (`{"enabled": bool}`; missing or
+  invalid = off), which neither the updater nor `/sync-omp-config` carries, and
+  which is read once per start. When on, the hook spawns the installed updater with
   `bun` from a managed `ctx.setTimeout` (an in-process fault must not take OMP
   down) and notifies only on changes or failures. `auto` takes the lock dir
   `~/.omp/omp-config-update.lock`, fetches into `~/.omp/omp-config-src`, then
   imports `applySnapshot` from the fetched clone's copy of the updater, so a
   commit is applied by its own rules; keep `applySnapshot(options)`
   backward-compatible. The marker `<agent dir>/.omp-config-applied` is written
-  only after an error-free apply. Never put the Otty marker literal in the
-  updater: the marker check matches anywhere in a file and the updater is itself
-  a managed file.
+  only after an error-free apply. Plugin URLs are matched with `#ref` stripped,
+  so a host install pinned to a branch counts as installed. Never put the Otty
+  marker literal in the updater: the marker check matches anywhere in a file
+  and the updater is itself a managed file.
 - `agent/thinking-translator.json` — agent-root config read by
   `omp-thinking-translator` at `~/.omp/agent`. Managed regular item in both
   directions (field-level diff and edit; validate with `bun -e` + `JSON.parse`). Unlike
@@ -379,10 +386,10 @@ fields (e.g. `compaction.thresholdTokens`) and `extensions/doc-polish.json` are
 replaced, and the repo-only `extensions-last/README.md` comes along; on a
 machine with existing config use `/update-omp` or restore those afterwards.
 The installed `omp-light` / `omp-light.cmd` entries are generated outputs, not
-copy-set files. The copy set includes the updater and its startup hook, so the
-next `omp` start runs the first automatic apply (no `.omp-config-applied` yet),
-which installs `omp-light` beside the resolved `omp` and any missing plugins;
-copying the three light assets alone does not make `omp-light` resolvable.
+copy-set files. Copying the three light assets alone does not make `omp-light`
+resolvable: run `/update-omp` on the target, or `/omp-config-autoupdate on` and
+restart, whose first automatic apply (no `.omp-config-applied` yet) installs
+`omp-light` beside the resolved `omp` and any missing plugins.
 
 ## Runtime/Tooling Preferences
 
