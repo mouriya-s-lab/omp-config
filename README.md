@@ -149,7 +149,7 @@ flowchart LR
 
 **生效时机**：更新在当前会话运行期间落地。`config.yml` 实时重载，`APPEND_SYSTEM_MODEL.md`、`system-prompt-replace.json`、`PROMPT-INJECT-*.md`、`agents/` 从下一条 prompt 或下一次派发开始生效。`APPEND_SYSTEM.md`、扩展（包括这个扩展本身）和插件要到下次启动；有这类改动时，通知会提醒重启。也就是说，同一个会话里可能暂时是新数据配旧扩展代码，重启后一致。
 
-**通知**：有改动时弹一条 info，说明更新到哪个提交、写了几个、删了几个、补装了几个插件；失败时弹 warning。已是最新、拉取失败、锁被占用这三种情况只写日志，一直拉取失败时启动不会提醒，git 报错在日志里。headless 模式不弹通知，只写日志。
+**通知**：有改动时弹一条 info，说明更新到哪个提交、写了几个、删了几个、补装了几个插件；失败时弹 warning。已是最新、拉取失败、锁被占用这三种情况只写日志。headless 模式不弹通知，只写日志。通知只给汇总；`/omp-config-autoupdate run` 的详细报告只列它自己那次运行的结果：启动时已成功应用的更新，再 `run` 只会报告已是最新；启动时应用出错（不写 `.omp-config-applied`）时，`run` 会重新应用并逐条列出，见 [omp-config-autoupdate](#omp-config-autoupdate)。一直拉取失败时启动不会提醒，用 `run` 看 git 报错。
 
 ### `/update-omp`：仓库 → 本机
 
@@ -346,7 +346,7 @@ harness 会把 `APPEND_SYSTEM.md` 和每个 agent 的 `description` 都注入主
 |[bro](#bro)|`/bro`：把回复、文档或网页改写成易懂的解释|是|
 |[input-polish](#input-polish)|`Ctrl+Enter` 润色输入框草稿，overlay 预览后回车发送、Esc 取消|是|
 |[commandcode-model-spec](#commandcode-model-spec)|修复 `--model` 指定 commandcode 模型时的认证失败|是|
-|[omp-config-autoupdate](#omp-config-autoupdate)|启动时从 GitHub 默认分支自动更新本机配置；默认关闭，`/omp-config-autoupdate on\|off` 开关|是|
+|[omp-config-autoupdate](#omp-config-autoupdate)|启动时从 GitHub 默认分支自动更新本机配置；默认关闭，`/omp-config-autoupdate on\|off` 开关，`run` 立即更新并显示详细报告|是|
 
 ### 行为约束
 
@@ -779,7 +779,7 @@ overlay 里上下键或滚轮滚动，`C` 复制到系统剪贴板，`R` 重新�
 
 #### omp-config-autoupdate
 
-`omp-config-autoupdate.ts` 在 OMP 启动时触发[启动时自动更新](#启动时自动更新)。更新规则在更新器 `omp-config-update.ts` 里，这个扩展只负责开关、启动更新器、汇报结果。
+`omp-config-autoupdate.ts` 在 OMP 启动时触发[启动时自动更新](#启动时自动更新)，也可以随时手动更新一次。更新规则在更新器 `omp-config-update.ts` 里，这个扩展只负责开关、启动更新器、汇报结果。
 
 - **开关**：默认关闭。
 
@@ -788,12 +788,14 @@ overlay 里上下键或滚轮滚动，`C` 复制到系统剪贴板，`R` 重新�
   |`/omp-config-autoupdate` 或 `… status`|显示当前状态和开关文件路径|
   |`/omp-config-autoupdate on`|打开，下次启动起生效|
   |`/omp-config-autoupdate off`|关闭，下次启动起生效|
+  |`/omp-config-autoupdate run`|立即更新一次，显示详细报告；不受开关影响|
 
   开关存在 agent 目录下的 `omp-config-autoupdate.json`（`{"enabled": true}`）。文件不存在、内容无效都算关闭；内容无效时启动和 `status` 都会弹 warning。这个文件属于本机：更新器不管理它，`/sync-omp-config` 也不收回，每台机器各自决定开不开。每次启动读一次，所以改了开关从下次启动生效。
 - **时机**：开关打开时，每个进程只运行一次，在根会话的 `session_start` 里；subagent 和同进程的其他会话不重复运行。关闭时什么都不做，也不提示。
 - **做法**：用 `ctx.setTimeout` 起一个子进程 `bun <agent 目录>/omp-config-update.ts auto --agent-dir <agent 目录> --json`，不阻塞启动，读它最后一行 JSON 结果。agent 目录取 `getAgentDir()`，跟随 profile 和 `PI_CODING_AGENT_DIR`。更新放在子进程里，是因为扩展和 OMP 在同一个进程、没有隔离，更新器出任何问题都不能拖垮 OMP。会话先结束时子进程继续跑完：写入是原子的，锁也由它自己释放。
 - **通知**：见[启动时自动更新](#启动时自动更新)。
-- **失败**：找不到 `bun`、更新器文件不存在、子进程没给出结果、更新失败，都只弹 warning 并写日志，不影响会话。更新器文件不存在时，提示先执行一次 `/update-omp`。
+- **手动更新**：`run` 当场起同一个子进程，规则与启动时完全相同：从 GitHub 默认分支拉取，提交与 `.omp-config-applied` 不同才应用，拉取失败时不更新，锁被占用就跳过。开关关着也能用。跑完等会话空闲，把报告作为一条只显示、不触发模型回合的消息写进对话，内容包括结果、agent 目录、“上次应用的提交 → 新提交”、是否需要重启，以及逐条列出的错误、写入、删除、跳过（含原因）、补装和仍缺失的插件、说明。报告只覆盖这一次运行，不回放启动时那次更新。已是最新、拉取失败（附 git 报错）、锁被占用、找不到 `bun` 或更新器时，报告说明原因。这条消息会进入会话上下文，模型之后也能看到。
+- **失败**：启动时找不到 `bun`、更新器文件不存在、子进程没给出结果、更新失败，都只弹 warning 并写日志，不影响会话；更新器文件不存在时，提示先执行一次 `/update-omp`。`run` 遇到同样的情况时，原因写在报告里。
 
 ### 兼容性修复
 

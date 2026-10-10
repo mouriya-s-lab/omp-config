@@ -163,7 +163,7 @@ Slash commands run inside `omp` started at the repo root:
 /update-omp [check]           # working checkout -> machine via `omp-config-update.ts apply --source .`; asks about plugin uninstall candidates and missing machine-local init files
 /sync-omp-config [check]      # machine -> repo (repo write only); syncs light assets, never installed PATH entries. Full mode commits+pushes
 /migrate-omp-keys <target>    # SSH-copy auth_credentials to a remote omp host (not a snapshot path)
-/omp-config-autoupdate [status|on|off]   # machine-local switch for startup auto-update (off by default; applies from next start)
+/omp-config-autoupdate [status|on|off|run]   # machine-local switch for startup auto-update (off by default; applies from next start); run = update from GitHub now, full report in the transcript
 ```
 
 Shell scripts run from repo root:
@@ -313,7 +313,9 @@ There is **no** `build`/`lint`/`test` command — this repo has none (see Testin
   which is read once per start. When on, the hook spawns the installed updater with
   `bun` from a managed `ctx.setTimeout` (an in-process fault must not take OMP
   down) and notifies only on changes or failures (up to date, a busy lock, and
-  a failed fetch only log). `auto` takes
+  a failed fetch only log); `/omp-config-autoupdate run`
+  spawns the same child on demand, whatever the switch says, and posts the full
+  report of that run only as a display-only transcript message. `auto` takes
   the lock dir `~/.omp/omp-config-update.lock`, fetches into
   `~/.omp/omp-config-src` (a failed fetch, first clone included, applies
   nothing and returns `offline`), then
